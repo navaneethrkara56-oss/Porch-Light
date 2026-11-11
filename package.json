@@ -1,0 +1,42 @@
+{
+  "name": "porch-light",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "seed:dev": "npm --prefix Porch_server run seed:dev"
+  },
+  "dependencies": {
+    "@fontsource/anton": "^5.3.0",
+    "@fontsource/instrument-serif": "^5.1.1",
+    "@fontsource/manrope": "^5.1.1",
+    "@fontsource/space-mono": "^5.1.1",
+    "@paper-design/shaders-react": "^0.0.82",
+    "@photo-sphere-viewer/core": "^5.13.4",
+    "browser-image-compression": "^2.0.2",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.4.7",
+    "gsap": "^3.15.0",
+    "jspdf": "^2.5.2",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^0.475.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.54.2",
+    "react-hot-toast": "^2.5.2",
+    "react-leaflet": "^4.2.1",
+    "react-router-dom": "^6.29.0",
+    "recharts": "^2.15.1",
+    "tailwind-merge": "^3.0.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.2",
+    "tailwindcss": "^3.4.17",
+    "vite": "^5.4.14"
+  }
+}

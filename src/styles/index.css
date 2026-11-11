@@ -1,0 +1,211 @@
+@import '@fontsource/instrument-serif/400.css';
+@import '@fontsource/instrument-serif/400-italic.css';
+@import '@fontsource/manrope/400.css';
+@import '@fontsource/manrope/500.css';
+@import '@fontsource/manrope/600.css';
+@import '@fontsource/space-mono/400.css';
+@import '@fontsource/space-mono/700.css';
+@import '@fontsource/anton/400.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* COLOR TOKENS */
+  --porcelain: #F1ECE3;
+  --sand: #E7DFD2;
+  --charcoal: #26262B;
+  --deep-purple: #5E4F7A;
+  --heather: #8F7FA8;
+  --lemon: #E6FF3D;
+  --preloader-bg: #F1ECE3;
+
+  /* HERO STAGE & WORDMARK TOKENS */
+  /* Wordmark font-size in cqw of the hero stage so it spans ~88% of stage width */
+  --wordmark-size: 13.6cqw;
+  /* Vertical position: Default / Large Desktop (>= 1024px) remains unchanged at 39.2cqh */
+  --wordmark-top: 39.2cqh;
+
+  /* HOVER AND MOTION SPEED TOKENS */
+  --dur-hover: 350ms;
+  --ease-hover: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-text: 0.9s;
+  --dur-image-reveal: 1.4s;
+  --dur-expand: 1.0s;
+  --dur-section: 1.0s;
+  --ease-reveal: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-expand: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* Aliases */
+  --dark-gray: #26262B;
+  --heather-purple: #8F7FA8;
+  --electric-lemon: #E6FF3D;
+}
+
+/* Medium screens: 768px - 1023px (tablets / medium viewports)
+   Raise the title slightly so most of each letter remains readable above the foreground cutout,
+   while allowing only a small portion to sit behind it. Large desktop positioning remains untouched. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  :root {
+    --wordmark-top: 31cqh;
+  }
+}
+
+/* Small screens: < 768px (mobile viewports)
+   Position the stacked two-line title in the clear sky area above the house cutout */
+@media (max-width: 767px) {
+  :root {
+    --wordmark-top: 20cqh;
+  }
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+html {
+  font-size: clamp(16px, 0.45vw + 9.5px, 22px);
+  scroll-behavior: auto;
+  scrollbar-gutter: stable;
+  background-color: var(--porcelain);
+  color: var(--charcoal);
+  font-family: 'Manrope', system-ui, sans-serif;
+  min-height: 100dvh;
+}
+
+body {
+  background-color: var(--porcelain);
+  color: var(--charcoal);
+  font-family: 'Manrope', system-ui, sans-serif;
+  min-height: 100dvh;
+}
+
+/* Ensure every flex or grid child inside Home sections gets min-width: 0 and max-width: 100% */
+:is(.home-page, main, #root) section :is([class*="flex"], [class*="grid"]) > * {
+  min-width: 0;
+}
+
+
+/* Hero Wordmark Text Gradient (Approved Warm Sunset): Sunrise Cream (#FFF5E1) at top to Golden Glow (#FFD188) at bottom */
+.wordmark-gradient {
+  background: linear-gradient(180deg, #FFF5E1 0%, #FFD188 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Hero Wordmark Subtle Shadow: rgba(0, 0, 0, 0.25), 10px blur, 4px vertical offset */
+.wordmark-shadow {
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.25));
+}
+
+/* Large desktop (>= 1024px): slightly enlarge only "LIGHT" to fill more background space */
+@media (min-width: 1024px) {
+  .wordmark-light-desktop {
+    font-size: 1.13em;
+  }
+}
+
+/* Photo Text Shadow Standard */
+.photo-text-shadow {
+  text-shadow: 0 1px 18px rgba(20, 20, 24, 0.45);
+}
+
+.hero-stats-shadow {
+  text-shadow: 0 1px 14px rgba(20, 20, 24, 0.6);
+}
+
+/* Smooth transition utility for interactive elements */
+.transition-smooth-hover {
+  transition-property: background-color, color, border-color, opacity, transform;
+  transition-duration: var(--dur-hover);
+  transition-timing-function: var(--ease-hover);
+}
+
+/* Subtle background grain simulation */
+.grain-overlay {
+  background-image: radial-gradient(rgba(38, 38, 43, 0.04) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
+/* Seamless infinite scroll keyframes for Intro section top strip */
+@keyframes scrollTrackLeft {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes scrollTrackRight {
+  0% {
+    transform: translateX(-50%);
+  }
+  100% {
+    transform: translateX(0%);
+  }
+}
+
+.animate-scroll-left {
+  animation: scrollTrackLeft 24s linear infinite;
+}
+
+.animate-scroll-right {
+  animation: scrollTrackRight 28s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-scroll-left,
+  .animate-scroll-right,
+  .animate-reviews-scroll {
+    animation: none !important;
+  }
+}
+
+@keyframes reviewsScrollTrack {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-reviews-scroll {
+  animation: reviewsScrollTrack 55s linear infinite;
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--porcelain);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--heather);
+  border-radius: 9999px;
+}
+
+/* Calm tinted map tiles (blending OpenStreetMap with warm porcelain palette) */
+.map-tile-beige {
+  filter: sepia(18%) contrast(96%) brightness(98%) hue-rotate(345deg);
+}
+
+/* Custom Leaflet Map Pin reset & centering */
+.custom-property-pin {
+  background: transparent !important;
+  border: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}

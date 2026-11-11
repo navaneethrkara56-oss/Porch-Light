@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+Porch_server/node_modules/
+
+# Production builds
+dist/
+dist-ssr/
+*.local
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+Porch_server/.env
+Porch_server/.env.*
+!Porch_server/.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+*.log
+
+# Uploads & local persistence
+uploads/
+Porch_server/uploads/
+backups/
+_backup_*/
+scratch/
+Porch_server/backups/
+Porch_server/data/localStore.json
+Porch_server/data/*.json
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Ensure all documentation markdown files are tracked
+!*.md
+

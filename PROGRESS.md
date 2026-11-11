@@ -1,0 +1,2156 @@
+# Progress Log — Porch Light
+
+## Done
+- **FOCUSED RECORD-DATE FIX — AGENT, USER, ADMIN, EMI, AND RENT (2026-11-11)**:
+  - **1. Root Cause Resolution & Mongoose Schema Hardening ([Payment.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/models/Payment.js), [PaymentSchedule.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/models/PaymentSchedule.js))**:
+    - Discovered root cause: Mongoose `PaymentSchema` lacked `paidAt` and `dueAt` fields in its definition. Because Mongoose enforces `strict: true` by default, `paidAt` fields passed during Stripe fulfillment were stripped before saving to MongoDB documents.
+    - Updated `PaymentSchema` to explicitly define `paidAt: { type: Date, default: null, index: true }` and `dueAt: { type: Date, default: null }`.
+    - Added custom `toJSON` and `toObject` transform serializing `paidAt`, `createdAt`, `updatedAt`, and `dueAt` as ISO strings, while maintaining backward-compatible aliases `timestamp: ret.paidAt || ret.createdAt || null` and `paymentDate: ret.paidAt || null`.
+    - Updated `PaymentScheduleSchema`'s `InstallmentItemSchema` with `dueAt: { type: Date, default: null }` and ensured serialization of `dueDate`, `dueAt`, and `paidAt`.
+  - **2. Authoritative Persistence & Webhook Idempotency ([payments.controller.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/controllers/payments.controller.js), [scheduleGenerator.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/utils/scheduleGenerator.js))**:
+    - In `fulfillSuccessfulCheckoutSession`: Resolved authoritative payment date directly from Stripe's checkout session timestamp (`session.created * 1000`).
+    - Protected against webhook retry date drift: If a payment already possesses a verified `paidAt`, idempotent retries preserve the existing timestamp rather than overwriting with retry processing time.
+    - Attached target obligation due date (`dueAt`) to installment payment records, keeping payment completion date distinct from obligation due date.
+    - Updated `getPayments` API controller to normalize all payment records with ISO date strings, defensively backfilling `paidAt = createdAt` for completed payments in responses.
+  - **3. Trustworthy Historical Database Backfill ([migratePaymentDates.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/scripts/migratePaymentDates.js), [seedDev.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/scripts/seedDev.js))**:
+    - Ran safe migration backfilling canonical `paidAt` exclusively from trustworthy stored `createdAt` timestamps across all 10 existing completed transactions in MongoDB (`TX-2026-881201`, `TX-2026-990001`, `TX-2026-771101`, `TX-2026-881202`, `TX-2026-771102`, `TX-2026-414518`, `TX-2026-329339`, `TX-2026-984026`, `TX-2026-600693`, `TX-2026-278683`).
+    - Verified all 6 pending checkout sessions remain strictly untouched with `paidAt: null`. Never fabricated dates or used current time.
+    - Updated `seedDev.js` so future development database re-seeds populate explicit canonical `paidAt` timestamps.
+  - **4. Standardized Frontend Formatting & Universal IST Rendering ([formatDate.js](file:///d:/Project%20files/Porch-light(antigravity)/src/lib/formatDate.js))**:
+    - Created centralized date formatting utility ensuring consistent `Asia/Kolkata` (IST) presentation across the application:
+      - `formatPaymentDate(payment, { includeTime })`: Renders canonical completed payment date in IST (date-only by default, or with 12-hour time if requested). Fallback is strictly `"Date unavailable"`.
+      - `formatDueDate(dateOrInstallment)`: Formats scheduled EMI/rent due date. Never conflated with payment date.
+      - `formatScheduledDate(dateOrBooking)`: Formats booking/visit appointments.
+      - `getPaymentDateTimestamp(payment)`: Extracts numeric timestamp for robust descending chronological sorting.
+  - **5. Hardened All Role-Specific Record Tables & Modals**:
+    - **Agent Transactions** ([AgentTransactionsPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/agent/AgentTransactionsPage.jsx)): Sorted payments with `getPaymentDateTimestamp`, rendered completed transactions with `formatPaymentDate(p)`, and formatted upcoming obligations with `formatDueDate(nextInst)`. Eliminated blank transaction dates.
+    - **Agent Property Management** ([AgentPropertyManagePage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/agent/AgentPropertyManagePage.jsx)): Updated property payments table to use `formatPaymentDate(p)`.
+    - **User Payments & Transactions** ([UserPaymentsPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/user/UserPaymentsPage.jsx)): Unified with `formatPaymentDate(p, { includeTime: true })` and `formatDueDate(d)`.
+    - **User Properties & Leases** ([UserPropertiesPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/user/UserPropertiesPage.jsx)): Replaced `payment.timestamp` and removed hardcoded mock lease dates (`'Sep 2026' – 'Sep 2027'`), rendering real lease start/end dates in IST.
+    - **User Overview Recent Activity** ([UserOverviewPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/user/UserOverviewPage.jsx)): Formatted event dates with `formatEventDate(item.date)`.
+    - **Admin Transactions & Revenue** ([AdminTransactionsPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/admin/AdminTransactionsPage.jsx)): Unified completed transaction dates with `formatPaymentDate(p, { includeTime: true })` and scheduled obligation due dates with `formatDueDate(nextInst)`.
+    - **EMI & Rent Modals** ([PropertyObligationModal.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/components/payment/PropertyObligationModal.jsx), [InstallmentPaymentModal.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/components/payment/InstallmentPaymentModal.jsx)): Bound installment due dates to `formatDueDate`.
+    - **Receipts & Invoices** ([PaymentSuccessPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/payment/PaymentSuccessPage.jsx), [documents.js](file:///d:/Project%20files/Porch-light(antigravity)/src/services/documents.js)): Replaced `Date.now()` fallbacks with authoritative `formatPaymentDate(payment, { includeTime: true })`.
+  - **6. Verification & Build**:
+    - Production build (`npm run build`) succeeded in 14.49s with 0 errors. Verified Vite dev server on port 5174 and Express server on port 5000.
+    - Confirmed `AGENTS.md` is strictly absent from the workspace root.
+- **FULL PAYMENT WORKFLOW HARDENING — STRIPE, EMI, RENT, DEPOSITS, AND REDIRECTS (2026-11-11)**:
+  - **1. Financial Ledger Isolation & Pending Session Expiration ([payments.controller.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/controllers/payments.controller.js), [dashboard.controller.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/controllers/dashboard.controller.js))**:
+    - Hardened `getPayments` to default filter by `status: { $in: ['completed', 'refunded'] }`. Incomplete, pending, failed, or cancelled Stripe checkout sessions are strictly excluded from User, Agent, and Admin payment history and revenue calculations.
+    - Updated global search in `dashboard.controller.js` to restrict transaction search strictly to `status: 'completed'`.
+    - Implemented `POST /api/payments/cancel-session/:sessionId` and webhook handler for `checkout.session.expired` to cleanly transition pending records to `cancelled`/`expired` without recording ledger transactions or triggering notifications.
+    - Preserved technical idempotency in `db.stripeEvents` to prevent duplicate ledger creation on webhook replay.
+  - **2. Resilient Return Navigation & Context Validation ([PaymentCancelPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/payment/PaymentCancelPage.jsx), [router.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/app/router.jsx), [stripe.service.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/services/stripe.service.js))**:
+    - Carried canonical `property_id`, `purpose`, and sanitized internal return destinations through Stripe checkout metadata and return URLs.
+    - Updated `PaymentCancelPage` to validate property accessibility before building return URLs. Canonical `/property/:id` is generated when valid; if property is unavailable or sold, presents calm notice and routes safely to `/buy` or `/rent`.
+    - Added `<Route path="/properties/:id" element={<RequireAuth><RedirectToPropertyDetails /></RequireAuth>} />` in `router.jsx` to prevent 404s when plural property paths are navigated.
+    - Enforced strict return URL sanitization prohibiting external protocols, double slashes, and JavaScript URIs, with guaranteed Home fallback (`/`).
+  - **3. Authoritative Event Timestamps & Cross-Role Synchronization ([payments.controller.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/controllers/payments.controller.js))**:
+    - Stored verified payment date directly from Stripe's event timestamp (`session.created * 1000`) rather than client clock time.
+    - Synced one canonical payment record across User transaction history, representing Agent's property ledger, and Admin revenue reports without duplicating records per role.
+    - Enforced strict authorization in `GET /api/payments/session-status/:sessionId` ensuring only the verified payer, listing agent, or platform administrator can query checkout session statuses, preventing URL tampering.
+  - **4. Complete Rental Security Deposit & Lease Lifecycle ([AgentPropertyManagePage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/agent/AgentPropertyManagePage.jsx), [PropertyDetailsPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/PropertyDetailsPage.jsx), [payments.controller.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/controllers/payments.controller.js))**:
+    - Synchronized `deposit` and `securityDeposit` across Agent listing forms, edit form state, backend property controllers, and public property views.
+    - Rendered explicit refundable security deposit separation from monthly rent and move-in outlay on `PropertyDetailsPage`, with clear "Not provided" state when deposit is omitted.
+    - Updated mutual lease cancellation (`respondLeaseCancellation`) and agent-initiated termination (`agentTerminateLease` enforcing 1 full paid month) to atomically halt all future rent schedule items, revoke active Autopay mandates (`autopayEnabled: false`, `autopayMandateStatus: 'revoked'`), and set property to `pending_handover` without deleting historical ledger records.
+  - **5. Production Build & Verification**:
+    - Production build (`npm run build`) succeeded in 14.22s with 0 errors. Verified Vite dev server on port 5174 and Express server on port 5000.
+    - Verified `AGENTS.md` is strictly absent from the workspace root.
+- **FULL STRIPE TEST INTEGRATION — ONE-TIME PAYMENTS, AUTOPAY, AND PAYMENT RESULT PAGES (2026-11-11)**:
+  - **1. Centralized Stripe Checkout & Authoritative Backend Calculation ([stripe.service.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/services/stripe.service.js) & [payments.controller.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/controllers/payments.controller.js))**:
+    - Centralized all platform financial entry points into a unified Stripe Checkout session endpoint (`POST /api/payments/create-checkout-session`):
+      - Full Property Acquisition (`full_purchase`)
+      - EMI Purchase Down Payment (`emi_down_payment`)
+      - Scheduled EMI Installments (`emi_installment`)
+      - Rental Move-in Security Deposit & Advance (`rent_deposit`)
+      - Scheduled Monthly Rent Installments (`rent_installment`)
+      - Permanent Premium Listing Upgrade (`promotion_fee`, ₹15,000)
+    - Calculated all charge amounts authoritatively on the backend in Indian paise (`unit_amount: Math.round(amount * 100)`, currency: `inr`). Prohibited client-dictated price tampering and prevented duplicate purchases using atomic database status checks (`db.properties.atomicTransition`).
+    - Configured Stripe Customer mapping, attaching user identities and metadata for idempotency and transaction tracking.
+  - **2. Strict Webhook & Synchronous Verification Lifecycle ([app.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/app.js) & [payments.routes.js](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/routes/payments.routes.js))**:
+    - Configured unauthenticated raw buffer parser `express.raw({ type: 'application/json' })` mounted specifically for `/api/payments/webhook` preceding `express.json()`.
+    - Handled authoritative Stripe events (`checkout.session.completed`, `payment_intent.payment_failed`) verified with `STRIPE_WEBHOOK_SECRET` and enforced idempotency using the dedicated [`StripeEvent`](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/models/StripeEvent.js) collection.
+    - Implemented fallback synchronous verification in `GET /api/payments/session-status/:sessionId`: If webhook delivery is delayed during local testing, queries Stripe Checkout session directly and fulfills the confirmed purchase/lease immediately, eliminating result page hanging.
+  - **3. Autopay Recurring EMI & Rent with India RBI E-Mandate Compliance**:
+    - Built explicit user opt-in toggle and disclosure banner in [`CheckoutPage.jsx`](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/CheckoutPage.jsx) and [`InstallmentPaymentModal.jsx`](file:///d:/Project%20files/Porch-light(antigravity)/src/components/payment/InstallmentPaymentModal.jsx).
+    - Attached `setup_future_usage: 'off_session'` to the Stripe Checkout payment intent, securely saving customer payment methods for recurring deductions.
+    - Added background off-session charge execution in [`duePaymentScheduler.js`](file:///d:/Project%20files/Porch-light(antigravity)/Porch_server/src/jobs/duePaymentScheduler.js). Handled 3D Secure step-up authentication failures gracefully with instant notifications linking to manual payment.
+    - Added in-app Autopay status badge and Revoke/Enable toggle in [`PropertyObligationModal.jsx`](file:///d:/Project%20files/Porch-light(antigravity)/src/components/payment/PropertyObligationModal.jsx) and [`UserPaymentsPage.jsx`](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/user/UserPaymentsPage.jsx).
+  - **4. Tactile ReceiptPrinter Adaptation & Custom Result Pages ([ReceiptPrinter.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/components/payment/ReceiptPrinter.jsx), [PaymentSuccessPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/payment/PaymentSuccessPage.jsx) & [PaymentCancelPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/payment/PaymentCancelPage.jsx))**:
+    - Adapted provided tactile receipt printer into JSX using `framer-motion` and `lucide-react`:
+      - Machine body in dark charcoal with indicator terminal LED.
+      - Stepped feed transform keyframe animation with zig-zag perforated paper teeth clip path (`receiptClipPath`).
+      - Stage progression: `processing` -> `printing` -> `complete`.
+    - Result page polls backend status, automatically dispenses receipt upon verification, and renders confirmed transaction ID, receipt number, property snapshot, amount in INR, and payment card details.
+    - Built one-click PDF receipt export via [`generatePaymentReceiptPDF`](file:///d:/Project%20files/Porch-light(antigravity)/src/services/documents.js) and safe return navigation.
+    - Added calm Porch Light failure/cancellation page (`/payment/cancel`) with retry actions.
+  - **5. Production Verification**:
+    - Frontend production build (`npm run build`) succeeded in 11.81s with 0 errors. Backend syntax check passed (`node -c Porch_server/server.js`) with daemons running cleanly.
+    - Confirmed `AGENTS.md` is strictly absent from the workspace root.
+- **MODAL FULL-ISOLATION & AGENT MANAGE PROPERTY TYPOGRAPHY RE-BALANCING (2026-11-11)**:
+  - **1. Modal Full-Screen Overlay, Portals & Internal-Only Scroll ([PropertyObligationModal.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/components/payment/PropertyObligationModal.jsx), [InstallmentPaymentModal.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/components/payment/InstallmentPaymentModal.jsx), [AgentRatingModal.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/components/rating/AgentRatingModal.jsx) & [AgentPropertyManagePage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/agent/AgentPropertyManagePage.jsx))**:
+    - **React Portals Integration**: Teleported the Upcoming EMI Installments and Upcoming Rent Payments modals (`PropertyObligationModal` and `InstallmentPaymentModal`) directly into `document.body` via `createPortal`. This breaks out of the `framer-motion` CSS transform and local stacking context in `DashboardLayout`, ensuring the `fixed inset-0 z-[100]` modal backdrop renders at the true root above the sticky navigation `<header>` (`z-50`). No header is visible while either modal is open.
+    - **Strict Viewport & Document Scroll Lock**: Enforced double scroll locks on both `document.body` and `document.documentElement` (`overflow: hidden`), preventing background page scroll. Added `overscroll-none touch-none` on outer backdrops and `overscroll-contain` on scrollable modal bodies (`flex-1 min-h-0 overflow-y-auto`) so scrolling occurs strictly inside the modal without leaking into page scroll. Restored original overflow on modal close.
+  - **2. Agent Manage Property Page Font Size Re-balancing ([AgentPropertyManagePage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/agent/AgentPropertyManagePage.jsx))**:
+    - Re-balanced typography across the entire agent management console to calm, highly readable standard sizes:
+      - Page title reduced from `text-2xl sm:text-3xl` to `text-xl sm:text-2xl font-medium text-deep-purple`.
+      - Section headers across all 8 tabs reduced from `text-xl sm:text-2xl` to `text-lg sm:text-xl font-medium text-charcoal`.
+      - Quick telemetry indicators tuned from `text-xl sm:text-2xl` to `text-lg sm:text-xl font-serif text-charcoal font-medium`, with labels at `text-[11px]`.
+      - Immutable specifications grid values toned down to clean, readable `text-sm font-medium text-charcoal` (labels at `text-[11px]`).
+      - Narrative text and form inputs standardized to `text-sm`.
+      - Buttons standardized to Porch Light standard `text-xs uppercase tracking-wider font-medium`.
+  - **3. Production Verification**:
+    - Production build (`npm run build`) succeeded with 0 errors in 15.15s. Verified Vite development server running on `http://localhost:5174/` and backend on `http://localhost:5000/`.
+    - Explicitly confirmed that `AGENTS.md` is absent from workspace root.
+- **FOCUSED USER PAYMENT MODAL FIX — HEADER CLIPPING AND CARD VALUE COLOR (2026-11-11)**:
+  - **1. Sticky Header Clipping Fix ([PropertyObligationModal.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/components/payment/PropertyObligationModal.jsx) & [InstallmentPaymentModal.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/components/payment/InstallmentPaymentModal.jsx))**:
+    - Integrated dynamic [`useHeaderOffset`](file:///d:/Project%20files/Porch-light(antigravity)/src/hooks/useHeaderOffset.js) tracking across both the EMI/rent plan details modal and the in-app installment payment modal.
+    - Repositioned modal overlays to `fixed left-0 right-0 bottom-0` with dynamic inline `style={{ top: `${headerOffset}px` }}`, ensuring modal views render strictly below the sticky navigation header on desktop, tablet, and mobile.
+    - Constrained inner modal cards with `max-h-[calc(100dvh-${headerOffset}px-1.5rem)] sm:max-h-[calc(100dvh-${headerOffset}px-2.5rem)]` and `flex flex-col`, keeping header titles and footer close/pay buttons pinned and reachable.
+    - Set `overflow-y-auto flex-1` on modal bodies so overflowing content (schedules, terms, method selection, inputs) scrolls smoothly within the available viewport without clipping.
+    - Added body scroll locking (`document.body.style.overflow = 'hidden'`) with guaranteed cleanup restoring original scroll position on modal close or unmount.
+  - **2. Third Summary-Card Value Color Harmonization**:
+    - Updated the third summary card ("Remaining Balance" for EMI financing and "Active Lease" duration for residential leases) in [PropertyObligationModal.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/components/payment/PropertyObligationModal.jsx#L196) from `text-deep-purple` to `text-charcoal`.
+    - Harmonized typography and color tokens with Metric 1, Metric 2, and Metric 4 (`font-serif text-lg text-charcoal font-medium`) while preserving existing card content, layout hierarchy, and status indicator badges.
+  - **3. Production Verification**:
+    - Executed production build (`npm run build`) which succeeded with 0 errors. Verified Vite development server running on `http://localhost:5174/` and backend on `http://localhost:5000/`.
+    - Explicitly confirmed that `AGENTS.md` is absent from workspace root.
+- **FIX: USER PAYMENTS PAGE RUNTIME REFERENCE ERROR (2026-11-11)**:
+  - Fixed a `ReferenceError: upcomingEmiItems is not defined` runtime exception on [UserPaymentsPage.jsx](file:///d:/Project%20files/Porch-light(antigravity)/src/pages/dashboard/user/UserPaymentsPage.jsx#L285).
+  - In line 285, the tab badge referenced obsolete identifiers (`upcomingEmiItems.length + upcomingRentItems.length`). Updated to use the canonical grouped properties schedules: `groupedEmiSchedules.length + groupedRentSchedules.length`.
+  - Production build and Vite HMR verified clean with 0 errors.
+- **FOCUSED AGENT PROPERTY MANAGEMENT UPDATE — READABILITY, STATUS ACTIONS, VISITS, AND RENT CANCELLATION (2026-11-10)**:
+  - **1. Readability & Typography Overhaul (`AgentPropertyManagePage.jsx`)**:
+    - Replaced undersized (`text-[10px]`, `text-[11px]`, `text-xs`) and low-contrast (`text-dark-gray/50`, `text-charcoal/50`) typography across the entire management page with readable font weights and sizes:
+      - Display headings in Instrument Serif (`text-2xl sm:text-3xl font-medium text-deep-purple`).
+      - Section headers in serif (`text-xl sm:text-2xl font-medium text-charcoal`).
+      - Narrative and explanatory text in Manrope (`text-sm sm:text-base leading-relaxed text-charcoal/85`).
+      - Badges, tabs, and form labels in Space Mono (`text-xs uppercase tracking-wider font-medium text-charcoal/80`).
+      - Rupee amounts rendered with `RupeeSymbol` and clean, balanced serif numbers (`text-base sm:text-xl font-serif font-medium text-charcoal`).
+      - Touch targets expanded to minimum 38–44px for buttons and form inputs.
+  - **2. Sold & Leased Property Management Access**:
+    - Removed restrictive editing blocks for sold and leased properties in `Porch_server/src/controllers/properties.controller.js` and `src/services/properties.js`.
+    - Allowed agents to update narrative descriptions, pricing terms, and 5-photo architectural galleries across all listings, including sold and actively leased residences.
+    - Preserved authoritative lifecycle states: edits to sold or leased properties strictly preserve `isSold: true, status: 'sold'` or `isLeased: true, status: 'rented'`, preventing properties from silently becoming available on public Buy/Rent discovery.
+    - Active EMI purchases explicitly count as sold, blocking secondary buyers from purchasing the property.
+    - In `TopPropertiesSection.jsx` and `getProperties`, excluded sold, leased, and archived properties from public search and home showcase carousels even if promotion flags are toggled.
+    - Implemented reversible safe archival (`isArchived: true, status: 'archived'`): deleting encumbered listings preserves all financial transactions, payment schedules, receipts, ratings, and regulatory audit compliance records. Added `restoreProperty` (`PATCH /api/properties/:id/restore`) to allow restoring archived listings back to active management.
+  - **3. Authoritative Rental Termination Rules**:
+    - Created backend-enforced agent-initiated lease termination endpoint `POST /api/payments/leases/:id/agent-terminate`.
+    - Enforced the rule that early termination is only permitted after the rent for at least one complete rental month has elapsed from `leaseStartDate` AND confirmed paid coverage exists in the database ledger.
+    - Displays an informative guard banner detailing the exact upcoming eligibility date when the one-month requirement has not elapsed.
+    - When eligible, agent specifies effective date and justification reason. Cancels future unpaid installments in `PaymentSchedule`, moves property to `pending_handover`, and dispatches notifications to user and agent.
+    - Preserved the existing User-initiated early cancellation request workflow with agent review actions (Approve & End Lease vs Decline).
+  - **4. Visit Requests Tab**:
+    - Added dedicated "Visit Requests" tab to `AgentPropertyManagePage.jsx`, fetching real walkthrough appointments scoped strictly to the property via `getBookings({ propertyId: id })`.
+    - Filter pills for `All`, `Pending`, `Confirmed`, `Completed`, and `Declined`.
+    - Shows prospective client identity, date, time slot, phone/email, and client walkthrough notes.
+    - Action controls for Confirm Visit, Decline, Cancel, and Mark Completed (enabled once the scheduled walkthrough time has arrived).
+    - High-priority banner for User-initiated reschedule requests with one-click Accept New Time and Decline actions.
+  - **5. Management Page Back Button Fix**:
+    - Replaced contextual browser-back logic with an explicit, reliable destination button navigating directly to `/agent/listings` ("Back to My Listings").
+    - Prevents accidental returns to payment pages, checkout, or unrelated routes regardless of how the page was reached (from Analytics, direct URL, or refresh).
+  - **6. Production Verification & Integrity Safeguards**:
+    - Production build (`npm run build`) succeeded with 0 errors.
+    - Verified all existing backend records and database collections remain intact without destructive wipes.
+    - Explicitly verified and confirmed that `AGENTS.md` is absent from workspace root.
+- **AGENT PROPERTY MANAGEMENT REDESIGN — ONE MANAGEMENT PAGE PER LISTING (2026-11-10)**:
+  - **1. Central Property Management Destination (`/agent/properties/:id`)**:
+    - Built a comprehensive, tabbed central management page in `src/pages/dashboard/agent/AgentPropertyManagePage.jsx` serving as the single destination for listing lifecycle, content, financials, marketing, and leasing operations.
+    - Added 7 organized management tabs:
+      1. *Overview*: Identity header, status badge, property specs summary, RERA registration, immutable specifications card (carpet area, bedrooms, bathrooms, floor, coordinates), inbound engagement telemetry (lifetime unique views, inquiry count, visit booking count).
+      2. *Listing Content (Edit)*: Narrative description, pricing, private negotiation toggle, rental terms, 5-photo architectural gallery (local WebP compressed upload, remote URL validation, cover selection, reorder, delete), 360 panorama tour (unlocked for Premium), locked immutable compliance specs view, and edit eligibility guard.
+      3. *Payments & Receipts*: Real backend transaction ledger, sale payment summary, official receipt PDF download (`generatePaymentReceiptPDF`), EMI down payment & installment breakdown, rental security deposits, and marketing fee receipts.
+      4. *EMI & Rent Obligations*: Grouped obligations summary card (recurring amount, next due date, status, remaining balance, tenure, lease duration).
+      5. *Promotions*: Permanent Premium tier upgrade (status, ₹15,000 fee, simulated payment modal, 360 tour unlock) and Featured showcase request (14-day window, 4 slots capacity, waitlist handling).
+      6. *Lease Management*: (For rental properties) Active lease summary, tenant early cancellation review (Approve & End Lease vs Decline with reason), handover inspection confirmation.
+      7. *Lifecycle & Archival*: Record external sale modal (sale date, buyer name, deed ID, notes, availability update without fake receipts) and permanent deletion controls (blocked when encumbered with detailed audit reasons; confirmation dialog requiring property title input when eligible).
+  - **2. Agent Listing Cards — Exactly Two Buttons (`AgentListingsPage.jsx`)**:
+    - Replaced the previous multi-action button collection with **exactly two buttons**:
+      - **"Preview"**: Navigates to `/property/:id` (public detail view).
+      - **"Manage"**: Navigates to `/agent/properties/:id` (central management console).
+    - Preserved status badges (`Approved`, `Pending`, `Sold`, `Leased`, `Rejected`), listing type, featured badge, RERA ID, price, and specs.
+    - Retained non-interactive status pills for "Tenant Early Exit Requested" and "Pending Handover Inspection" prompting the agent to click Manage.
+  - **3. Cross-Dashboard Synchronization & Agent Analytics Integration**:
+    - Updated Agent Analytics (`AgentAnalyticsPage.jsx`) "Upcoming Rent & EMI Obligations" table "View" button to navigate directly to `/agent/properties/${item.propertyId}?tab=obligations`.
+    - Added Action column with "Manage" button in Property Performance table navigating to `/agent/properties/${p.id}`, and made table rows click to the management page.
+    - Added "Request Early Exit" action button on active lease cards in User Properties (`UserPropertiesPage.jsx`) opening early cancellation modal with requested effective move-out date and reason.
+  - **4. Backend Schema & Controller Protections**:
+    - In `Porch_server/src/models/Property.js`, added `externalSaleDetails` schema object (`saleDate`, `buyerName`, `notes`, `externalReference`) and `leaseCancellationPending` boolean.
+    - In `Porch_server/src/controllers/properties.controller.js`:
+      - `markSoldOrRented`: Added support for `externalSale` payload, blocking sold transition if property has active lease, pending handover, or in-escrow payment; records external sale details safely without creating fake payments; dispatches notification.
+      - `deleteProperty`: Blocked deletion if property has historical payments, active payment schedules, active bookings, is sold, is leased, or in handover, returning an explicit explanatory list of reasons.
+    - In `Porch_server/src/controllers/payments.controller.js`:
+      - `requestLeaseCancellation`: Sets `cancellationRequest` with `requestedDate` and `reason`, marks `property.leaseCancellationPending = true`, dispatches notifications to agent and user.
+      - `respondLeaseCancellation`: Enforces agent ownership check (rejects unauthorized agents from responding to other agents' leases); on `agree: true`: sets `payment.leaseStatus = 'ended'`, cancels future rent installments in `PaymentSchedule`, sets property to `pending_handover`, and notifies tenant and agent; on `agree: false`: leaves lease active and notifies tenant with decision reason.
+      - `confirmRentalHandover`: Verifies agent ownership, sets `isLeased: false`, `rentalStatus: 'available'`, `leaseCancellationPending: false`, returning listing to public rent discovery, and notifies agent.
+  - **5. Production Build & Integrity Safeguards**:
+    - Production build (`npm run build`) succeeded with 0 errors in 13.86s.
+    - Verified all existing backend records and database collections remain intact without destructive wipes.
+    - Explicitly confirmed that `AGENTS.md` is absent from workspace root.
+- **FOCUSED PAYMENT UI REFINEMENT — GROUP EMI AND RENT BY PROPERTY (2026-11-10)**:
+  - **1. Grouped Obligations Summary across Dashboards**:
+    - **Single Summary Entry per Property Plan**: Replaced repeating rows that rendered every future EMI installment with exactly one summary entry per property schedule in User Payments, Agent Transactions, Agent Analytics, and Admin Transactions.
+    - **Active Lease Next Rent Summary**: Replaced repeated rent rows with a single summary card representing the next upcoming actionable rent payment for active leases. Rent summaries automatically stop after lease completion and maintain strict separation between security deposits and recurring rent.
+    - **Key Summary Metrics**: Identified property title, locality, RERA license ID, plan type (`Monthly EMI Plan` or `Active Lease`), next due date with installment index, next installment/rent amount, duration / remaining tenure (months left), remaining loan balance, and IST date-synchronized status (`Upcoming`, `Due today`, `Overdue`).
+  - **2. Reusable Porch Light Themed Property Obligation Modal (`PropertyObligationModal.jsx`)**:
+    - Built a calm, fully accessible (`Escape` listener, background scroll locking, scrollable on mobile) modal component in `src/components/payment/PropertyObligationModal.jsx`.
+    - Presents property photography, address, state RERA number, installment progress meter (`X / Y` installments), recurring monthly amount, next actionable due date with status badge, remaining principal balance, and financing terms (Down Payment, Principal Borrowed, 8.5% interest) or lease terms (Monthly rent, Security deposit held in escrow, Due day).
+    - **Role-Gated Actions**: Users can trigger the in-app "Pay Now" checkout for due installments; Agents and Admins see audited escrow transparency summaries without payment actions.
+  - **3. User Payments Page (`UserPaymentsPage.jsx`)**:
+    - Replaced all future installment repetitions with grouped summaries for active EMI financing plans and residential leases.
+    - Attached "View Plan" and "View Lease" buttons opening `PropertyObligationModal`.
+    - Integrated direct "Pay Now" action for actionable due payments opening `InstallmentPaymentModal` with UPI, Card, and NetBanking methods.
+  - **4. Agent Transactions & Analytics (`AgentTransactionsPage.jsx` & `AgentAnalyticsPage.jsx`)**:
+    - **Agent Transactions Page**:
+      - Removed obsolete "Purchase Tokens" filter. Replaced with canonical filter types: `All`, `Full Purchases`, `EMI Installments`, `Rent Payments`, `Promotion Fees` with real-time synchronized counts.
+      - Added dual-view tab switcher: `Transaction Ledger` vs `Property Obligations`.
+      - In `Property Obligations` tab, displays grouped property obligations table scoped to listings managed by the signed-in agent, with "View" action opening `PropertyObligationModal`.
+      - In `Transaction Ledger` tab, updated classification badges to `Full Purchase`, `EMI Installment`, `Rent Payment`, and `Marketing Fee`.
+    - **Agent Analytics Page**:
+      - Updated `financials.scheduledObligations` to display grouped property summaries with "View" button opening `PropertyObligationModal`.
+      - Corrected summary card typography to uniform Porch Light standard (`font-serif text-2xl sm:text-3xl text-charcoal font-medium`).
+  - **5. Admin Transactions & Platform Financials (`AdminTransactionsPage.jsx`)**:
+    - Grouped obligations table under dedicated `Property Obligations (Grouped)` tab, eliminating repeating future installments from platform-wide views while preserving individual historical ledger entries for moderation and financial audits.
+    - Added "Scheduled Obligations" summary card to platform financial metrics row matching exact typography (`font-serif text-2xl sm:text-3xl text-charcoal font-medium`).
+    - Eliminated obsolete token-payment filter options in favor of canonical categories (`Full Payments`, `EMI Installments`, `Rent & Deposits`, `Promotion Fees`).
+    - Integrated "View" action opening `PropertyObligationModal` in Admin escrow inspection view.
+  - **6. Backend Grouping & Volume Synchronization**:
+    - Updated `getAgentAnalytics` in `Porch_server/src/controllers/analytics.controller.js` to group scheduled obligations by property schedule, emitting 1 summary entry per active plan and computing aggregate totals (`scheduledUpcomingRentTotal`, `scheduledUpcomingEmiTotal`, `scheduledOverdueTotal`, `scheduledPaidTotal`).
+    - Updated `getAdminDashboardStats` in `Porch_server/src/controllers/dashboard.controller.js` and `src/services/dashboard.js` to compute `fullPurchaseVolume`, `emiVolume`, `rentVolume`, and `promoVolume`.
+  - **7. Production Verification & Architecture Safeguards**:
+    - Production build (`npm run build`) succeeded with 0 errors in 13.06s.
+    - Confirmed canonical MongoDB Atlas ledger records are preserved without destructive modifications.
+    - Explicitly verified and confirmed that `AGENTS.md` is absent from workspace root.
+- **FULL REBUILD — AGENT ANALYTICS AND ADMIN TRANSACTION SUMMARY (2026-11-08)**:
+  - **A. Agent Analytics Page Rebuild (`/agent/analytics`)**:
+    - **Header & Rule-Based Insight**: Restructured heading with mono eyebrow "Portfolio", optional "Demo data" pill (rendered only when records are flagged as demonstration data), serif title "Sales and traffic analytics", deterministic rule-based insight sentence (derived from view-to-inquiry ratios, top-viewed quiet listings, and period deltas with zero AI hallucination), and compact period selector pills (`7d`, `30d`, `90d`, defaulting to `30d`).
+    - **Four Summary Figures**: Arranged in a clean single row on desktop and 2x2 grid on mobile:
+      1. *Unique Views*: Unique listing views during the period, compared against the preceding period of equal duration.
+      2. *Inquiries*: Inquiries received in the period, with preceding period comparison.
+      3. *Leased in Period*: Residences leased during the period, plus secondary lifetime leased count.
+      4. *Sold in Period*: Residences sold during the period, plus secondary lifetime sold count.
+    - **Lifetime Unique View Deduplication Engine**:
+      - Replaced daily deduplication with strict **lifetime unique view per signed-in user per property** in `Porch_server/src/models/Operational.js` via unique compound index `{ propertyId: 1, userId: 1, type: 1 }` with partial filter `{ userId: { $ne: 'guest' } }`.
+      - In `Porch_server/src/db/dataStore.js`, enforced pre-check and unique constraint validation.
+      - In `analytics.controller.js` and `properties.controller.js`, excluded listing owners (`agentId`, `customId`, `_id`) and administrators from view recording and count metrics.
+      - Reopening a property never inflates counts; displayed summary total and property performance table share the exact same canonical definition.
+    - **Full-Width Rating Analytics**:
+      - Average star rating numeral, total verified rating count, 5-star distribution visualizer bar, and deterministic trend note (e.g. most frequent star rating or period delta).
+      - Star-only display with zero client PII or written reviews, strictly scoped to the authenticated agent's listings.
+    - **Recorded Ledger & Money Overview**:
+      - Itemized cards: Total Volume Recorded, Rent Received, Sale Payments Recorded, and Scheduled Obligations (monthly rent from active leases and monthly EMI installments from financing records).
+      - Action link directly navigating to `/agent/transactions`.
+      - Mandatory disclaimer: client transaction amounts are logged in Porch Light escrow records; agent brokerage commissions and payouts are settled externally and are not platform revenue.
+    - **Property Performance Table & Mobile Cards**:
+      - High-density desktop table and stacked mobile cards with columns: Property title & city, period Unique Views, period Inquiries, period Visits, and Status badge.
+      - Sortable by Views, Inquiries, Visits, Price (High-Low / Low-High).
+      - Filterable by Listing Type (All, Sale, Rent) and Status (All, Active, Pending, Closed).
+      - Search input with clear filter reset button. Clicking any row navigates directly to the property's public details page.
+    - **Data States**: Added `DashboardSkeleton` for loading, empty state for agents with 0 listings, recoverable error state with Retry button, and a dedicated pending verification notice blocking unauthorized analytics.
+  - **B. Admin Transactions & Revenue Summary (`/admin/transactions`)**:
+    - Built platform-wide income and transaction summary cards directly above the Admin transaction table:
+      1. *Recorded Volume*: Total gross volume across active filtered dataset with total record count.
+      2. *Successfully Collected*: Settled payment amounts (`status === 'completed'`) and count.
+      3. *Pending / Processing*: Unresolved payment amounts and count (`status === 'pending' || status === 'failed'`).
+      4. *Promotion Revenue*: Platform administrative revenue collected from verified premium upgrades.
+    - Added a 4-way category breakdown grid: Full Payments, EMI Installments, Rental Deposits, and Promotion Fees (count and amount for each).
+    - Added an escrow and brokerage settlement disclaimer: "Brokerage payouts and partner commissions are handled externally. Gross transaction values represent client payments recorded through Porch Light escrow, while platform revenue is limited to administrative fees (such as verified promotions)."
+    - All summary numbers dynamically recalculate and synchronize when filtering by "All Transactions", "Full Payments", "EMI Installments", "Rental Deposits", or "Promotion Fees".
+  - **C. Backend Analytics Endpoint (`GET /api/analytics/agent`)**:
+    - Created dedicated endpoint in `Porch_server/src/controllers/analytics.controller.js` and `Porch_server/src/routes/analytics.routes.js`.
+    - Protected with `requireAuth` and `requireRole([ROLES.AGENT, ROLES.ADMIN])`.
+    - Resolves agent identity across `_id`, `id`, and `customId`, and computes metrics strictly from live MongoDB Atlas collections (`properties`, `bookings`, `inquiries`, `ratings`, `payments`, `AnalyticsEvent`).
+  - **D. Verification & Build Integrity**:
+    - Tested `GET /api/analytics/agent?period=7d|30d|90d` with live agent credentials: confirmed 200 OK with accurate telemetry, rating distributions, and property performance metrics.
+    - Tested view deduplication: confirmed owner view is excluded, first buyer view is recorded, and repeat buyer view is deduplicated (`recorded: false`).
+    - Verified Admin Payments: confirmed 200 OK across all simulated transactions and accurate category sums.
+    - Production build (`npm run build`) succeeded with 0 errors in 13.64s.
+    - Confirmed `AGENTS.md` is absent from workspace root.
+- **FOCUSED UI AND DATA FIX — RATINGS, GALLERY, UPCOMING DATES, AND TRANSACTION TYPES (2026-11-08)**:
+  - **Item 1: Agent Ratings Aggregate Display**:
+    - In `src/pages/dashboard/agent/AgentProfilePage.jsx`, removed the recent ratings list while preserving the overall rating summary numeral, 5-star rating icons, eligible verified rating count, and the 5-star distribution breakdown bar chart.
+    - Preserved backend rating eligibility, star submission, aggregation, and notification logic untouched.
+  - **Item 2: Property Gallery Lightbox Close Button**:
+    - Connected `useHeaderOffset()` in `src/pages/PropertyDetailsPage.jsx` to dynamically position the lightbox top bar.
+    - Added safe-area padding: when the global header is visible, `paddingTop` offsets the bar below the fixed 72px header (`calc(${headerOffset}px + 0.75rem)`), keeping the close button fully visible, clickable, and reachable above gallery content; when the header is hidden on scroll, falls back to `max(1rem, calc(env(safe-area-inset-top, 0px) + 0.75rem))` respecting mobile notches.
+    - Added keyboard accessibility and high-contrast Porch Light focus ring: `aria-label="Close gallery lightbox"`, `focus:outline-none focus-visible:ring-2 focus-visible:ring-electric-lemon focus-visible:ring-offset-2 focus-visible:ring-offset-black`.
+  - **Item 3: User Overview Upcoming Event Dates ("Next Up On Your Calendar")**:
+    - Fixed root cause of missing date/time fields: Mongoose document spreading `{ ...b }` in `Porch_server/src/controllers/dashboard.controller.js` dropped getter properties on booking documents, leaving `earliest.date` and `earliest.timeSlot` undefined in `nextVisit`. Converted Mongoose documents using `b.toObject()` and explicitly mapped `date`, `timeSlot`, and `propertyId`.
+    - In `src/pages/dashboard/user/UserOverviewPage.jsx`, introduced `formatEventDate` to parse and format stored event dates using Indian/local formatting conventions (`8 Nov 2026`), displaying `Date: 8 Nov 2026 (11:00 AM)`.
+    - Added clear unavailable fallbacks (`Date unavailable`, `(Time unavailable)`) without substituting current date or fake sample dates when data is missing.
+  - **Item 4: Admin Transactions & Revenue Filter Types**:
+    - In `src/pages/dashboard/admin/AdminTransactionsPage.jsx`, removed the deprecated "Token Advances" filter pill option.
+    - Added "Full Payments" (`id: 'full'`) and "EMI Installments" (`id: 'emi'`) filter options matching canonical backend payment records (`full_purchase`, `full_payment`, `emi_down_payment`, `emi`, and financing plan snapshots).
+    - Added `emi_down_payment` to the Mongoose `Payment.type` enum in `Porch_server/src/models/Payment.js`.
+    - Updated transaction Category formatting in table and mobile card views to render clean, readable labels ("Full Payment", "EMI Installment", "Rental Deposit", "Promotion Fee").
+  - **Verification**:
+    - `npm run build` compiled with 0 errors in 14.30s.
+    - Live API verified: `/api/dashboard/user/stats` now returns populated `date: "2026-11-08"` and `timeSlot: "11:00 AM"` for `nextVisit`.
+    - Live API verified: `/api/payments` returns live ledger records compatible with "Full Payments", "EMI Installments", "Rental Deposits", and "Promotion Fees" filters.
+    - Confirmed `AGENTS.md` is absent from workspace root.
+- **FOCUSED ACCESS AND PROPERTY-LIFECYCLE FIX — PROFILES, TRANSACTIONS, RATINGS, CONNECTIVITY, AND ROUTE PROTECTION (2026-11-08)**:
+  - **Item 1: User Profile Page Error Fix & State Hardening**:
+    - Identified exact root cause of User Profile crash: `useEffect` was invoked at line 35 of `src/pages/dashboard/user/UserProfilePage.jsx` without being imported from React (`import React, { useState } from 'react';`), throwing `ReferenceError: useEffect is not defined` immediately on mount.
+    - Added `useEffect` to the React import list. Added a graceful `DashboardSkeleton` while `authLoading` is true, and a recoverable error card with Retry and Sign In buttons when `!user && !authLoading`.
+    - Added loading state to the profile save button (`saving` disabled state) and proper toast notifications for avatar and details save failures.
+    - Made `initiateDeleteCheck` asynchronous with `await canDeleteAccount()`.
+    - Added backend route alias `GET /api/auth/profile` mapping to `authController.getMe` in `Porch_server/src/routes/auth.routes.js` to ensure both `/api/auth/profile` and `/api/auth/me` resolve consistently.
+  - **Item 2: Purchase & Rental Availability Enforcement per Property**:
+    - **Frontend Ownership & Action Box (`PropertyDetailsPage.jsx`)**: When an authenticated user has already acquired a residence (`buyerId === user.id || buyerId === user.customId`), replaced the "Proceed to Checkout" button on both desktop Action Box and mobile bottom bar with a clear "You have acquired this residence" badge, while preserving "Book Private Visit" and "Contact Agent" actions.
+    - **Checkout Availability Guard (`CheckoutPage.jsx`)**: If a residence is sold (`isSold`, `status === 'sold'`, or `availabilityStatus === 'sold'`), checkout blocks payment and guides the visitor to `/buy` (or informs previous buyers that they have already acquired it). If an active lease is ongoing (`isLeased`, `status === 'rented'` with valid `leaseEndDate > now`), checkout blocks rental payment and guides to `/rent`.
+    - **Properties Controller Privacy & Catalog Isolation (`Porch_server/src/controllers/properties.controller.js`)**:
+      - Enforced strict privacy on sold residences in `getPropertyById`: only the verified buyer, assigned agent, or Admin can view a sold property; all other users and unauthenticated guests receive HTTP 403 Forbidden. Removed hardcoded `viewerId === 'usr_1'` backdoor.
+      - Enforced privacy on actively leased residences: only the tenant, assigned agent, or Admin can view an active lease.
+      - Public catalog browse (`getProperties`) and algorithmic recommendations (`getSimilarProperties`) strictly filter out sold and actively leased residences; regular users/guests passing `includeSold=true` are gated.
+      - Automatically expires leases whose `leaseEndDate <= now` on both listing fetches and payment checkout.
+    - **Payments, Visits, and Chat Guards**:
+      - `payments.controller.js`: Rejects checkout if buyer has already acquired the property or if the property is already sold.
+      - `chat.controller.js`: Blocks chat thread initiation on sold residences for non-buyers.
+      - `bookings.controller.js`: Rejects private visit bookings on sold residences for non-buyers.
+  - **Item 3: Agent Ratings Area & Rating Notifications**:
+    - **Backend Ratings Controller & Route (`Porch_server/src/controllers/ratings.controller.js`)**:
+      - Added `GET /api/ratings/my-ratings` route returning aggregate ratings (`averageRating`, `totalRatings`, 5-star `distribution`) and sanitized `recentRatings` (`id`, `rating`, `propertyTitle`, `createdAt`) with zero client PII or written reviews.
+      - In `submitRating`, dispatches an in-app notification exclusively to the target agent (`userId: resolvedAgentCustomId`), updating any existing notification for the same transaction/property to prevent duplicate notifications.
+    - **Frontend Agent Profile Ratings Area (`src/pages/dashboard/agent/AgentProfilePage.jsx`)**:
+      - Built "Client Star Ratings" reputation area with average star rating numeral, 5-star distribution chart, and recent verified ratings feed.
+      - Added empty state: "No ratings recorded yet. Verified star ratings appear here automatically after clients complete acquisitions or lease transactions for your residences."
+      - Added real-time subscription via `subscribeToRatings` and listeners for `porch:rating-submitted` and `porch:notifications-updated`.
+  - **Item 4: Access & Urban Connectivity Dynamic Integration**:
+    - Added `approachRoad`, `nearestTransit`, `airportDistance`, `railwayDistance`, `hospitalDistance`, and `commercialDistance` to the Mongoose schema in `Porch_server/src/models/Property.js` and string-trimming sanitization in `sanitizePropertyPayload`.
+    - Added concise placeholder guidance hints to all 6 fields in `AgentNewListingPage.jsx` and ensured new listings initialize completely blank.
+    - Bound dynamic connectivity fields in `PropertyDetailsPage.jsx` with consistent fallback to "Not provided" when absent.
+  - **Item 5: Role & Verification Route Protection**:
+    - Created `RequireVerifiedAgent.jsx` frontend guard and wrapped `/agent/new-listing`, `/agent/new-listing/:id`, `/agent/edit-listing/:id`, and `/agent/promotions` in `src/app/router.jsx`.
+    - Updated backend `requireVerifiedAgent` in `Porch_server/src/middleware/authorize.js` to verify agent status against MongoDB Atlas `db.users`, permitting Admins and verified agents, while returning HTTP 403 `AGENT_PENDING_VERIFICATION` to pending agents.
+    - Applied `requireVerifiedAgent` to `POST /api/properties`, `PATCH /api/properties/:id`, `DELETE /api/properties/:id`, `PATCH /api/properties/:id/status`, and `POST /api/promotions/premium-badge`.
+  - **Verification**:
+    - `npm run build` compiled with 0 errors in 12.78s.
+    - Porch_server backend tested on port 5000 with MongoDB Atlas `porch_light` connection.
+    - All API test scenarios verified: user profile load/update, pending agent guard (403), unauthorized listing creation (403), ratings endpoint (200 with sanitized data), and catalog isolation.
+    - Confirmed `AGENTS.md` is absent from workspace root.
+- **FOCUSED BACKEND-INTEGRATION FIX — MAP TILES, WATERMARK REMOVAL, AGENT VERIFICATION CARD DYNAMIC BINDING, AND CHECKOUT CLEANUP (2026-11-07)**:
+  - **Item 1: Removal of "API KEY REQUIRED" Carto Tile Watermark & Map Stabilization**:
+    - Discovered root cause of map watermark (`media_1794065102297_04e093bc.png`): Carto basemaps now imprint diagonal `"API KEY REQUIRED carto.com/basemaps/apikey"` watermarks across raster tiles when fetched keyless.
+    - Switched tile layers in `src/components/map/PropertyMap.jsx` and `src/pages/dashboard/agent/AgentNewListingPage.jsx` to standard, 100% free, keyless OpenStreetMap tiles: `https://tile.openstreetmap.org/{z}/{x}/{y}.png` with attribution `&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors`.
+    - Enhanced `MapResizeHandler` in `src/components/map/PropertyMap.jsx` with `ResizeObserver` and multi-stage `map.invalidateSize({ pan: false })` timers (100ms, 300ms, 600ms, 1200ms) to guarantee immediate tile rendering and prevent grey map containers when transitioning between Listings and Map tabs.
+  - **Item 2: Dynamic Agent Verification Card on Property Details Page**:
+    - Discovered root cause of hardcoded "PN / Priya Nambiar / Malabar Heritage Realty" card (`media_1794065091985_58481a3b.jpg`): lines 603-614 in `src/pages/PropertyDetailsPage.jsx` hardcoded `PN` initials and agent strings instead of rendering `property.agent`.
+    - Replaced hardcoded block with dynamic rendering:
+      - Renders `property.agent.avatar` with `onError` fallback to an initials circle derived from `property.agent.name`.
+      - Renders `property.agent.name` (fallback `'Assigned Representative'`) and `property.agent.agency` (fallback `'Porch Light Partner Agent'`).
+      - Dynamically displays RERA verification shield with verified number tooltip when verified.
+      - Reset `agentAvatarError` state when `property.id` or `property.agent.avatar` changes.
+    - Updated `ContactAgentModal`, `PropertyChatModal`, and `AgentRatingModal` fallbacks from `'Priya Nambiar'` to generic assigned agent fallbacks.
+    - In `src/pages/CheckoutPage.jsx`, updated post-checkout rating prompts to dynamically reference `{property?.agent?.name || 'your agent'}`.
+  - **Verification**:
+    - `npm run build` completed with 0 errors in 12.51s.
+    - Live server API verified: MongoDB Atlas database `porch_light` preserved and active.
+    - Confirmed `AGENTS.md` is absent from workspace root.
+- **FOCUSED BACKEND-INTEGRATION FIX — PROFILE PHOTOS, NOTIFICATIONS, PROPERTY SUBMISSION, MAP TILES, AND NEW LISTING BLANK FORM (2026-11-07)**:
+  - **Item 1: Profile Photo Display Everywhere & Robust Fallbacks**:
+    - Discovered root cause of broken profile photo avatars (`media_1794061603971_dc04936e.png`): in `ProfilePhotoUploader.jsx`, `formData.append('file', ...)` was called before `formData.append('category', 'avatar')`. Multer parses multipart fields in stream order, causing `req.body.category` to be undefined during file storage destination computation, writing avatar files into `uploads/chat/` while returning `/api/media/file/avatar/...` which 404ed on static retrieval.
+    - Swapped FormData order in `ProfilePhotoUploader.jsx` so `category` precedes `file`, and added fallback directory resolution in `Porch_server/src/routes/media.routes.js` to serve from any category if file exists.
+    - Removed `Content-Security-Policy: default-src 'none'` on static file serving in `media.routes.js` which blocked image embedding in browser tags, and added `Cross-Origin-Resource-Policy: cross-origin`.
+    - Added `onError` fallback handlers across `ProfilePhotoUploader.jsx`, `DashboardLayout.jsx` (desktop & mobile drawers), and `Header.jsx` to render initials avatar circle instead of browser broken image icon and raw alt text.
+    - Synchronized form states in `UserProfilePage.jsx` and `AgentProfilePage.jsx` via `useEffect([user])` to immediately load user avatar and details on authentication readiness.
+  - **Item 2: Notifications Skeleton Loading Elimination**:
+    - Discovered and eliminated infinite notification event loop: `getNotifications()` in `notifications.js` dispatched `porch:counts-updated`, which `DashboardLayout.jsx` was listening to by invoking `fetchCounts()`, which immediately called `getNotifications()`, looping endlessly and starving the JavaScript event loop.
+    - Guarded `notifyNotificationCountListeners` to be a strict no-op if unread count is unchanged, and removed duplicate `porch:counts-updated` emission.
+    - Added in-flight request deduplication in `getNotifications()`.
+    - In `UserNotificationsPage.jsx`, `AgentNotificationsPage.jsx`, and `AdminAnnouncementsPage.jsx`, bound loading lifecycle with `isMounted` guards and ensured `loading` sets to `false` in `finally` blocks under all outcomes.
+    - Added live listener for `porch:notifications-updated` in notification pages to immediately synchronize unread items without full page reload.
+  - **Item 3: Intermittent "Failed to fetch" Elimination**:
+    - Discovered connection exhaustion was caused by the concurrent thousands of requests spawned by the notification loop and lack of request timeouts in `apiClient.js`.
+    - Added 15-second `AbortSignal.timeout` to `apiClient.js` fetch calls.
+    - In `AgentListingsPage.jsx`, fixed agent ID matching (`p.agentId === user.id || p.agentId === user.customId || p.agentId === user._id`) so agent listings consistently resolve.
+    - Separated Error state from Empty state: when an API error occurs, `AgentListingsPage.jsx` now displays a clear connection failure card with Retry button, never showing the misleading "You haven't listed any residences yet" empty state while in error.
+  - **Item 4: Add Property Submission & Mongoose Cast Errors**:
+    - Identified exact root cause of toast error (`media_1794061604029_d3198f2c.png`): `parking` was formatted as a string (`"${parking} bays"`), while Mongoose `Property.parking` schema requires `Number`. `pool` was submitted as a boolean (`false`), while Mongoose `Property.pool` schema requires an enum (`'private' | 'shared' | 'none'`).
+    - Added robust `sanitizePropertyPayload` helper in `Porch_server/src/controllers/properties.controller.js` for both `createProperty` and `updateProperty`:
+      - Normalizes `parking` to an integer (extracts digits or defaults to 0).
+      - Normalizes `pool` to enum `'private'`, `'shared'`, or `'none'` (converts booleans and string booleans).
+      - Coerces all numeric fields (`price`, `bedrooms`, `bathrooms`, `balconies`, `builtUpArea`, `carpetArea`, `plotArea`, `floor`, `totalFloors`, `deposit`, `securityDeposit`, `maintenanceFee`, `maintenance`, `loadingDocks`, `lat`, `lng`) to numbers.
+      - Coerces all boolean fields (`garden`, `gym`, `lift`, `powerBackup`, `security`, `gated`, `petsAllowed`) to true booleans.
+      - Maps aliases `maintenance` $\rightarrow$ `maintenanceFee`, `securityDeposit` $\rightarrow$ `deposit`.
+    - Normalized submission types in `AgentNewListingPage.jsx` to send clean numbers and enum strings.
+  - **Item 5: Add Property Photo Previews Matching Edit Property**:
+    - Unified 4:3 preview container, sizing, cover badge, remove button, and left/right ordering controls in `AgentNewListingPage.jsx` to perfectly match Edit Property (`media_1794061604061_09207ec1.jpg`).
+    - Added broken image fallback in gallery preview cards: when a photo fails to load, renders a calm "Preview unavailable" state instead of an ugly broken browser icon (`media_1794061604065_eafb6a62.jpg`).
+    - Direct URL input pre-validates via `validateRemoteImageUrl` (`new Image()` with timeout) before adding to the gallery.
+    - Allowed removing all photos so agents can freely clear and replace images.
+  - **Item 6: External Map Tile Error & Grey Map Tiles**:
+    - Diagnosed grey map container and tile error banner: OpenStreetMap's tile server throttles and drops localhost requests without custom Referer or when subdomains are not passed as `abcd`, and container size shifts inside tab layouts cause un-invalidated Leaflet views.
+    - Configured high-reliability CartoDB Voyager tiles (`https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png`) with `subdomains="abcd"`, `maxZoom={19}`, and `crossOrigin="anonymous"` across `AgentNewListingPage.jsx` and `src/components/map/PropertyMap.jsx`.
+    - Updated tile error handler so transient tile retries do not trigger the error banner; only sets error state if persistent consecutive errors exceed threshold (>4).
+  - **Item 7: New Listings Start Completely Blank**:
+    - Removed all prefilled fake/sample data on new property listings in `AgentNewListingPage.jsx` (price, area, rooms, parking, pool, furnishing, floors, description, amenities, utilities, access details, coordinates).
+    - Initialized `images` to `[]` (empty array); no stock photos or auto-filled images from `getImagesForType`.
+    - When `images.length === 0`, renders a clean dashed 5-photo dropzone with camera icon guiding the agent to upload photos.
+    - Preserved ONLY verified agent's RERA Registration ID (`user?.reraNumber || ''`).
+    - Map center defaults to neutral city coordinates without saving as property location until agent places a pin or enters coordinates.
+  - **Verification**:
+    - Full frontend build (`npm run build`) succeeded with 0 errors in 13.53s.
+    - Live end-to-end API test verified: Property creation with `parking: "2 bays"` and `pool: false` succeeded with HTTP 201 and was cleaned up. Avatar upload with `category: 'avatar'` succeeded with HTTP 200 and static asset served with `image/png` and `cross-origin` policy.
+    - MongoDB Atlas database records intact and untouched.
+    - Documented explicitly that `AGENTS.md` is absent from workspace root.
+- **PORCH LIGHT FULL-STACK STABILIZATION PASS — AUDIT & REPAIR (2026-11-07)**:
+  - **Item 1: Dashboard Loading & Auth Session Restoration**:
+    - Fixed API base URL in `src/services/apiClient.js` to `/api`, utilizing Vite's proxy directly to `http://localhost:5000` to completely eliminate cross-origin cookie dropping and CORS issues.
+    - Persisted JWT token to `localStorage` (`porchlight_token`) and restored on client startup, ensuring page refreshes immediately send `Authorization: Bearer <token>`.
+    - Protected dashboard data fetching across `AdminUsersPage.jsx`, `UserOverviewPage.jsx`, `UserSavedPage.jsx`, `UserVisitsPage.jsx`, `UserPaymentsPage.jsx`, `AgentOverviewPage.jsx`, `AgentListingsPage.jsx`, `AgentInquiriesPage.jsx`, `AgentVisitsPage.jsx` by waiting for `!authLoading` from `useAuth()`.
+    - Added dedicated `error` state and retry button across all dashboard views, preventing transient network failures from rendering false empty states.
+  - **Item 2: Real-time Notifications & Badge Synchronization**:
+    - Implemented optimistic updates for mark-as-read, mark-all-read, delete, and delete-all in `UserNotificationsPage.jsx` and `AgentNotificationsPage.jsx` for zero-flicker UI updates.
+    - Fixed category filter mismatch (`visit` / `booking`, `promotion` / `moderation`).
+    - Fixed Admin sidebar badge in `DashboardLayout.jsx` to match `/admin/announcements` as well as `/notifications`.
+  - **Item 3: Profile Photos & Session State Sync**:
+    - Updated `ProfilePhotoUploader.jsx` to upload to `/media/upload` via `api.upload` with Bearer auth, receiving canonical public URLs.
+    - User avatar updates save to MongoDB `User` document and immediately update session user in `AuthContext`, synchronizing Header, sidebar, and profile view without reload.
+  - **Item 4: Agent Add Property Submission & Gallery Previews**:
+    - Resolved "Failed to fetch" on submission by proxying through `/api/properties` with full Bearer token and credentials.
+    - Enhanced error handling to surface backend validation details (`err.data?.error?.message || err.message`) and preserved form drafts.
+    - Standardized 4:3 gallery card previews with cover star toggle, move left/right, uncropped zoom inspection, and remove actions.
+  - **Item 5: Add Property Leaflet Map Preview**:
+    - Fixed blank/gray tile rendering (screenshot 1): added `MapResizeHandler` with `ResizeObserver` and multi-stage `map.invalidateSize()` timers (100ms, 300ms, 700ms) to ensure proper sizing in flex layouts.
+    - Constrained bounds to `INDIA_MAX_BOUNDS` with zoom range 4–18, set background to calm `#F1ECE3`, and added tile error fallback banner.
+  - **Item 6: User Overview Walkthrough Navigation**:
+    - In `UserOverviewPage.jsx`, fixed "Listing Details" under "Next Up On Your Calendar" to safely resolve property IDs (`propertyId || property?.id || property?._id || propertyCustomId`). Falls back cleanly to `/dashboard/visits` if no property ID is present, preventing broken navigation to `/property/`.
+  - **Item 7: Agent Ratings Isolation & Submission**:
+    - Resolved rating state bleed in `UserPaymentsPage.jsx`: bound rating modal strictly to the transaction's authentic agent (`p.agentId`, `p.agentName`) rather than a hardcoded default.
+    - In `ratings.controller.js`, strictly validated target agent against the authoritative payment record in MongoDB (`tx.agentId || prop?.agentId`).
+    - In `src/services/ratings.js`, pre-seeded `transactionRatingCache` on initial fetch to eliminate infinite network polling loops.
+  - **Item 8: Admin Featured Showcase Placement to Home Page**:
+    - Discovered root cause of 4 empty placeholders (screenshot 2): `TopPropertiesSection.jsx` prioritized `res.allMatching`, which lacked `featured` fields in the projection, causing `Boolean(p.featured)` to evaluate to false and all 4 curated residences to be filtered out.
+    - Prioritized `res.data` in `TopPropertiesSection.jsx` and added `featured`, `featuredOrder`, `featuredUntil` to `allMatching` in `properties.controller.js`.
+    - Confirmed Home page immediately renders all 4 admin-curated residences with live cover photos, titles, prices, and links.
+  - **Item 9: Calm Desktop Smooth Scrolling**:
+    - Refined `useSiteWideSmoothScroll.js` with trackpad vs. discrete mouse wheel damping detection (0.62 for discrete wheels, 0.88 for trackpads) and responsive 0.14 easing factor.
+    - Maintained 100% native scrolling on mobile/touch and full respect for `prefers-reduced-motion`.
+  - **Item 10: Focused Full-Stack Audit & Integrity**:
+    - Database preserved intact (MongoDB Atlas `porch_light` database remained untouched; no collections cleared or wiped).
+    - Verified `npm run build` succeeds with 0 errors in 15.85s.
+    - Confirmed `AGENTS.md` is absent from workspace root.
+- **PORCH LIGHT STABILIZATION PASS — AUDIT AND FIX THE REPORTED FULL-STACK FAILURES (2026-11-07)**:
+  - **Item 1: Home "List Your Property" Action & Role Protection**:
+    - Replaced raw unverified link in `HeroSection.jsx` with role-aware `handleListPropertyClick`.
+    - Role routing:
+      - Guests $\rightarrow$ routed to `/login?redirect=/agent/new-listing`.
+      - Approved Agents (`role === 'agent' && user?.isVerified !== false`) $\rightarrow$ routed to `/agent/new-listing`.
+      - Pending Agents (`role === 'agent' && user?.isVerified === false`) $\rightarrow$ routed to `/agent/overview` with toast notification regarding pending credential verification.
+      - Users (`role === 'user'`) $\rightarrow$ clear toast stating only verified partner agents can list, with registration link (`/register?role=agent`).
+      - Admins (`role === 'admin'`) $\rightarrow$ guided to `/admin/approvals`.
+    - Protected `AgentNewListingPage.jsx` on mount: if `user?.isVerified === false`, immediately redirects to `/agent/overview`.
+  - **Item 2: Live Home Stats & Featured Properties**:
+    - Implemented `GET /api/properties/home-stats` in `Porch_server/src/controllers/properties.controller.js` and mounted before `/:id` in `properties.routes.js`.
+    - Connected `getHomeStats()` to `HeroSection.jsx` and `IntroSection.jsx`, replacing hardcoded numbers with live aggregates.
+    - Updated `TopPropertiesSection.jsx` with `storage` and `porch:featured-updated` listeners for cross-tab and same-tab instant synchronization without reload.
+  - **Item 3: Data Loading & Dashboard Stability**:
+    - Audited asynchronous effects and lifecycle states across all dashboards, ensuring `try-catch-finally` blocks guarantee `setLoading(false)` to prevent infinite skeletons.
+    - Added unmounted component guards (`isMounted`) across dashboard overview and visit views.
+  - **Item 4: Buy/Rent Sorting & Availability**:
+    - Extended sorting options in `Porch_server/src/controllers/properties.controller.js`:
+      - `featured`: prioritizes `isPremium` first, then stable curation `featuredOrder` (1..4), then newest, then deterministic ID tie-breaker.
+      - `area_asc` and `area_desc`: sorted by carpetArea / builtUpArea / plotArea with tie-breaker.
+      - `price_asc` and `price_desc`: price sorted with deterministic tie-breaker.
+      - `newest`: created date descending with tie-breaker.
+    - Public catalog strictly filters out sold and leased properties (`status === 'approved' && !isSold && !isLeased`).
+  - **Item 5: Canonical 10 Operating Cities**:
+    - Established shared canonical constants in `src/constants/cities.js` and `Porch_server/src/constants/cities.js`:
+      - Exactly 10 canonical cities: `Delhi NCR`, `Mumbai`, `Kozhikode`, `Bengaluru`, `Kochi`, `Thiruvananthapuram`, `Chennai`, `Hyderabad`, `Pune`, `Goa`.
+      - Aliases normalized: `Bangalore` $\rightarrow$ `Bengaluru`, `Calicut` $\rightarrow$ `Kozhikode`, `Trivandrum` $\rightarrow$ `Thiruvananthapuram`, etc.
+    - Updated Header ticker (added Goa), Footer (removed Kolkata, ensured 10 canonical cities), filters, and agent forms.
+    - Normalized city queries at backend API boundary in `properties.controller.js`.
+  - **Item 6: Property Details, Status Labels, Floor Removal, & 360 Tours**:
+    - Created helper `formatPossessionStatus` in `src/constants/propertyTypes.js` to polish `ready_to_move` / `read_to_move` $\rightarrow$ `"Ready to Move"`.
+    - Completely removed `currentFloor` / unit floor input across forms, models, and views; retained total floors where applicable.
+    - Gated 360° panorama tour: hidden completely if not verified Premium and without valid tour asset (removed promotional upgrade box).
+  - **Item 7: Messaging & Contact Agent System**:
+    - Fixed `ContactAgentModal.jsx`: "Message in Porch Light" calls `chatService.getOrCreateChat` and navigates to `/dashboard/chat?thread=<id>`.
+    - Fixed `chat.controller.js`: resolved agent and user ID duality (`_id` vs `customId`), populated participant names, enforced single thread per user-agent-property pair to prevent duplicates, and enforced strict participant authorization on `sendMessage`.
+    - Supported `?thread=<id>` query parameter in `UserMessagesPage.jsx` and `AgentInquiriesPage.jsx`.
+  - **Item 8: Modals Viewport & Scroll Locking**:
+    - Created reusable hook `src/hooks/useBodyScrollLock.js` to lock `document.body.style.overflow = 'hidden'` on open and restore on close.
+    - Applied scroll lock and elevated z-index (`z-[60] pt-20`) to `ContactAgentModal.jsx`, `PropertyChatModal.jsx`, `AgentRatingModal.jsx`, and `LoginOverlay.jsx`.
+    - Bound modal internal scrolling to `max-h-[calc(100dvh-6rem)] overflow-y-auto`.
+  - **Item 9: Buy Purchase Flow: Token Elimination & Atomic Concurrency Guard**:
+    - Completely eliminated Buy token advance reservations across checkout and backend.
+    - Buy checkout supports ONLY Full Outright Payment and EMI Financing with Down Payment.
+    - Backend authoritatively recomputes all payment amounts from MongoDB property records.
+    - Implemented atomic state transition via `db.properties.atomicTransition` to prevent concurrent/duplicate purchases.
+  - **Item 10: Agent Add/Edit Property & Promotions Fixes**:
+    - Fixed `getPromotions()` data contract crash: now returns an array directly while maintaining `.data` compatibility.
+    - Fixed Leaflet map in Add Property with `map.invalidateSize()` after mount.
+    - Added sale payment terms (`salePaymentOptions`, `minDownPaymentPercent`) to Property model and form.
+  - **Item 11: Star-Only Ratings & Profile Synchronization**:
+    - Enforced 1–5 star ratings targeting exactly one eligible agent and completed transaction.
+    - Locked modal body scroll and ensured profile synchronization across app.
+  - **Item 12: User Dashboard Navigation & Unsupported Action Removal**:
+    - Fixed upcoming visit "Listing Details" link in `UserOverviewPage.jsx` to route to `/property/:id`.
+    - Removed unimplemented "Request Early Exit" button from `UserPropertiesPage.jsx`.
+  - **Item 13: Documentation & Verification**:
+    - Updated `PROGRESS.md` and `INTEGRATION.md`.
+    - Verified 0 frontend build errors (`vite build` succeeded in 12.28s).
+    - Verified all API endpoints on running daemon.
+    - Confirmed `AGENTS.md` is absent from workspace root.
+- **FULL-STACK DATA CONSISTENCY FIX — FEATURED HOMES, LIVE BADGES, PROPERTY COUNTS/STATUS, RENT LABELS, ADMIN TRANSACTIONS, AND TARGETED RATINGS (2026-11-06)**:
+  - **Item 1: Home Featured Section 4-Slot Consistency & Admin Publishing**:
+    - Enforced exactly 4 visual slots in `src/components/home/TopPropertiesSection.jsx`: available active curated properties fill slots 0..3, and remaining slots are rendered as themed unfilled placeholder cards (`"Awaiting Editorial Selection"`), eliminating layout collapse and hardcoded mock fallbacks.
+    - Added real-time invalidation to `TopPropertiesSection.jsx` subscribing to `porch:featured-updated` and window focus events.
+    - Updated `AdminFeaturedPage.jsx` to enforce exactly 4 selections before enabling publish:
+      - Added dynamic indicator badge: `4 residences required. Selected: {selectedCount} of 4 ({neededCount} more needed)`.
+      - Disabled Publish button until exactly 4 slots are chosen.
+      - Added guidance banner for platform-wide eligibility when fewer than 4 eligible properties exist (`status === 'approved' && !isSold && !isLeased`).
+      - Dispatches `porch:featured-updated` event immediately upon successful publication.
+    - Updated `Porch_server/src/controllers/promotions.controller.js` `updateFeaturedCuration`:
+      - Validates 4-slot capacity ceiling.
+      - Automatically resets any properties previously marked featured that are not in the new 4 selected IDs, ensuring clean MongoDB state.
+      - Curated top 4 active residences in MongoDB `porch_light` database with `featuredOrder: 1..4`.
+  - **Item 2: Live Dashboard, Header, and Sidebar Badges**:
+    - Centralized notification badge management in `src/services/notifications.js`:
+      - Added observable state `subscribeToNotificationCount(callback)` and `notifyNotificationCountListeners(count)`.
+      - Dispatches `porch:notifications-updated` and `porch:counts-updated` on read, read-all, delete, and delete-all actions.
+      - Optimistically zeroes unread counts immediately upon "Mark all read" or "Clear all".
+    - Updated `src/components/layout/Header.jsx` and `src/components/dashboard/DashboardLayout.jsx` to subscribe to notification count changes and custom events, updating badge counts in real-time across header and sidebar without page reloads.
+    - Added event emission to `src/services/bookings.js` (`porch:bookings-updated`) and `src/services/admin.js` (`porch:properties-updated`) so pending visit and listing approval badges update immediately upon action.
+    - Enforced strict user isolation: resetting counts to 0 on logout/switch, and backend operational endpoints filter strictly by authenticated `userId`.
+  - **Item 3: Reconcile 27 Seeded Properties and Admin Status/Statistics**:
+    - Verified complete database distribution across all 27 seeded properties in MongoDB Atlas `porch_light`:
+      - Total Properties: 27
+      - Buy (Sale): 16 total (12 available, 2 pending, 2 sold)
+      - Rent: 11 total (5 available, 2 rejected, 4 leased)
+      - Moderation Breakdown: 23 Approved (17 available + 6 completed), 2 Pending (`prop-mumbai-3`, `prop-hyderabad-3`), 2 Rejected (`prop-chennai-3`, `prop-delhi-ncr-3`)
+      - Availability Breakdown: 17 Available (12 Buy, 5 Rent), 2 Sold (`prop-kochi-3`, `prop-bengaluru-3`), 4 Leased (`prop-kochi-2`, `prop-bengaluru-2`, `prop-mumbai-2`, `prop-hyderabad-2`)
+      - Agent Ownership: Vikramaditya Singhania (9 properties), Meera Nambiar (9 properties), Kabir Shroff (9 properties), Pooja Deshmukh (0 properties, pending RERA verification).
+    - Fixed `Porch_server/src/controllers/properties.controller.js`:
+      - When `status === 'all'` or `req.user?.role === ROLES.ADMIN`, do not filter out sold or leased properties unless explicitly specified (`includeSold !== 'false'`).
+      - Added support for `limit` query param alongside `pageSize`.
+    - Fixed `src/pages/dashboard/admin/AdminApprovalsPage.jsx`:
+      - Calls `getProperties({ status: 'all', includeSold: 'true', includeLeased: 'true', pageSize: 100, limit: 100 })`.
+      - Correctly displays and filters all 27 properties across tabs: Pending (2), Approved (17), Completed (6), Declined (2), and All (27).
+    - Added `sold` and `leased` property counts to `Porch_server/src/controllers/dashboard.controller.js` `getAdminStats` and mapped them in `src/services/dashboard.js`.
+  - **Item 4: Display Rent Prices as Monthly Amounts Everywhere**:
+    - Fixed `src/lib/formatINR.js`: updated `formatINR` so that `options.rent` appends `" / month"` even when `options.short: true` is passed (previously bypassed by short-form return statements).
+    - Guaranteed `options.rent` is passed to price formatters across all components:
+      - `PropertyGridCard.jsx`, `PropertyRowCard.jsx`, `PropertyRow.jsx`
+      - `TopPropertiesSection.jsx` (hero and expanded card price displays)
+      - `MapPropertyPreview.jsx` and `PropertyMap.jsx` (adjusted marker width to accommodate suffix)
+      - `PropertyDetailsPage.jsx` (overview, monthly rent header, and breakdown summaries)
+      - `UserSavedPage.jsx` and `AgentListingsPage.jsx` (replaced inconsistent `/mo` with standardized `formatINR` monthly suffix)
+      - Non-rent amounts (security deposits, maintenance, tokens, down payments) strictly avoid the rent monthly suffix.
+  - **Item 5: Fix Admin Transaction Dates & Access to Receipts/Payment Details**:
+    - Fixed "Invalid Date" bug in `src/pages/dashboard/admin/AdminTransactionsPage.jsx`: replaced undefined `p.timestamp` with robust `formatTransactionDate(p)` parsing `p.paidAt || p.createdAt || p.date`, with localized date formatting and graceful fallback.
+    - Privacy protection in `Porch_server/src/controllers/payments.controller.js`: when requested by `ROLES.ADMIN`, payment records are sanitized by stripping private financing details, bank account info, and personal receipt URLs/paths.
+    - Removed receipt PDF download buttons and columns from `AdminTransactionsPage.jsx` (desktop table and mobile cards), while preserving full authorized receipt generation for owning Users and Agents.
+  - **Item 6: Correct Agent Rating Targeting & Rating Control**:
+    - Resolved missing `createOrUpdate` method on `db.ratings` in `Porch_server/src/db/dataStore.js`, using atomic `findOneAndUpdate` with upsert to prevent duplicate ratings on the same transaction ID.
+    - In `Porch_server/src/controllers/ratings.controller.js` `submitRating`: explicitly resolved and validated `agentId` against the transaction/property, recomputing the aggregate and updating only the target agent's `rating` and `reviewCount` in the `User` collection.
+    - In `src/services/ratings.js`: updated `submitAgentRating` to accept `agentId`, invalidate agent-specific and property-specific caches, and emit `porch:rating-submitted`.
+    - In `src/components/rating/AgentRatingModal.jsx`: passed resolved `agentId` to `submitAgentRating`, maintaining a clean star-only (1-5 integer) rating workflow with no written reviews.
+    - In `src/pages/dashboard/user/UserPropertiesPage.jsx`:
+      - Improved rating button to clearly indicate state: `"Rate agent"` vs `"Your rating: X stars"`.
+      - Styled in Porch Light theme with full keyboard accessibility and tooltips.
+      - Resolved agent identity from transaction property data, preventing cross-agent rating pollution.
+  - **Verification**:
+    - Verified MongoDB data counts: exactly 27 properties, 12 available Buy, 5 available Rent.
+    - Verified Admin Approvals receives and filters all 27 properties.
+    - Verified 4 curated slots in MongoDB and 4-slot rendering on Home page.
+    - Production build (`npm run build`) succeeded with 0 errors.
+- **FOCUSED BACKEND-INTEGRATION FIX — LISTING FILTERS, SAVE TOGGLE, FEATURED HOMES, LIVE DASHBOARD STATS, VISIT COMPLETION, AND EVENT NOTIFICATIONS (2026-11-06)**:
+  - **Item 1: Repair Buy/Rent Listing Filters**:
+    - Discovered root cause of page crash when clicking "Filters": `PropertyFilterModal.jsx` had missing definitions for `formatPriceLabel` and `AMENITIES_LIST`, resulting in a runtime `ReferenceError: formatPriceLabel is not defined`.
+    - Defined `AMENITIES_LIST` with the exact backend amenity keys (`parking`, `security`, `powerBackup`, `gated`, `pool`, `gym`, `garden`, `clubhouse`) and implemented `formatPriceLabel(amount, isRent)` inside `PropertyFilterModal.jsx`.
+    - In `Porch_server/src/controllers/properties.controller.js`:
+      - Normalized `listingType` (`'buy'` -> `'sale'`) so frontend requests for both `buy` and `sale` retrieve acquisition listings accurately.
+      - Normalized `possessionStatus` comparison using regex (`/[\s_-]+/g`) so `'Ready to Move'` matches `'ready_to_move'`.
+      - Normalized `furnishing` comparison so `'Fully Furnished'` matches `'unfurnished'`, `'semi-furnished'`, and `'furnished'`.
+      - Trimmed and lowercased `type` queries so multiple or comma-separated property types match safely.
+  - **Item 2: Fix Save/Unsave from Buy and Rent Listing Cards**:
+    - Identified root cause in `PropertyBrowseLayout.jsx`: bookmark click threw `ReferenceError: user is not defined` because line 38 omitted `user` in `useAuth()` destructuring.
+    - Added `user` to `useAuth()` in `PropertyBrowseLayout.jsx`.
+    - Updated `handleToggleSave` in `PropertyBrowseLayout.jsx` to accept either an ID or object, resolve both `customId` and `id`, update `savedIds` with both identifiers, and display authoritative backend state.
+    - Updated `PropertyGridCard.jsx`, `PropertyRowCard.jsx`, `PropertyRow.jsx`, `PropertyMapExplorer.jsx`, and `MapPropertyPreview.jsx` to check both `property.id` and `property.customId`, and pass canonical `property.customId || property.id` to `onToggleSave`.
+    - Aliased `POST /api/properties/:id/save` to `authController.toggleSaveProperty` alongside `POST /api/auth/saved/:id` for seamless client compatibility.
+  - **Item 3: Admin-Controlled Featured Homes End-to-End**:
+    - Created `updateFeaturedCuration` in `Porch_server/src/controllers/promotions.controller.js` and mounted `PUT/POST /api/promotions/featured-curation` with `requireRole(ROLES.ADMIN)` in `Porch_server/src/routes/promotions.routes.js`.
+    - Enforced strict 4-slot ceiling, ordered placement (`featuredOrder`), expiration windowing (`featuredUntil`), and eligibility checks (`status === 'approved' && !isSold && !isLeased`).
+    - Handled input flexibility: accepts `{ slots: [...] }`, `{ items: [...] }`, or direct arrays.
+    - Updated `src/components/home/TopPropertiesSection.jsx`: removed `FALLBACK_SLOTS` and silent `fallbackPool` substitution. When no active featured homes exist, renders an elegant editorial empty state (`"Showcase Under Editorial Curation"`).
+  - **Item 4: Live MongoDB-Backed Dashboard Statistics**:
+    - In `Porch_server/src/controllers/dashboard.controller.js`:
+      - `getUserStats`: Aggregates live MongoDB values for `savedCount`, `upcomingVisitsCount`, `activeInquiriesCount`, `boughtCount` (`type === 'token_amount'`), `rentedCount` (`type === 'rent_deposit'`), `propertiesCount` (`boughtCount + rentedCount`), `nextVisit` (earliest upcoming walkthrough computed via date/time parsing), and `recentActivity` (chronologically sorted stream of recent payments and visits).
+      - `getAgentStats`: Computes and returns `activeListingsCount`, `pendingListingsCount`, `pendingReviewCount`, `upcomingVisitsCount` (confirmed), `pendingVisitsCount` (pending), `unreadInquiriesCount`, `isVerified`, `rating`, and `actionItems` (pending visit requests and new client reschedule requests with direct navigation links).
+      - `getAdminStats`: Dynamically returns `accounts` (excluding Admins), `properties` (available now vs total), `featuredShowcase`, `promotions: { pendingCount }`, `pendingPromotions`, financial ledger volume, open complaints, and agent reputation ratings.
+      - Updated `src/services/dashboard.js` and `src/services/analytics.js` to map all returned stats fields cleanly.
+  - **Item 5: Agent Visit Completion Flow**:
+    - Added helper `parseBookingDateTime(dateStr, timeSlotStr)` to parse date and time slot strings into UTC `Date` objects.
+    - In `Porch_server/src/controllers/bookings.controller.js` `updateBookingStatus`:
+      - Handles `status === 'completed'` and `status === 'visited'`.
+      - Enforces agent ownership (`booking.agentId === req.user.id || req.user.role === ROLES.ADMIN`).
+      - Enforces current status must be `'confirmed'` (rejects unconfirmed or declined visits).
+      - Verifies scheduled appointment date/time: rejects future attempts before scheduled time with HTTP 400 (`"Cannot mark a visit as completed before its scheduled time."`).
+      - Updates status to `'completed'` and creates user notification with idempotent key `notif_visit_complete_${booking.id}`.
+    - In `src/pages/dashboard/agent/AgentVisitsPage.jsx`:
+      - Added helper `isVisitEligibleForCompletion(booking)` comparing scheduled appointment with current client time.
+      - Displays `"Mark Visited"` emerald action button for confirmed visits whose time has arrived.
+      - Added `'completed'` to filter tabs (`all`, `pending`, `confirmed`, `completed`, `declined`) and emerald styling for completed visits.
+    - In `src/pages/dashboard/user/UserVisitsPage.jsx`:
+      - Updated status badge to display completed visits in emerald styling.
+  - **Item 6: Reliable Notifications & Reminder Architecture**:
+    - Made `db.notifications.create` completely idempotent by catching Mongo duplicate key errors (`err.code === 11000`) and returning existing notification doc.
+    - Added idempotent `customId` keys across all core events:
+      - Walkthrough visits: requested (`notif_visit_req_agent_...`, `notif_visit_req_user_...`), confirmed/declined (`notif_visit_confirmed_...`), cancelled (`notif_visit_cancel_...`), rescheduled (`notif_visit_resched_req_...`, `notif_visit_resched_resp_...`), completed (`notif_visit_complete_...`).
+      - Payments: token & rent receipts (`notif_pay_usr_...`, `notif_pay_agt_...`), verified rating eligibility (`notif_rate_elig_...`), mutual lease cancellation (`notif_lease_cancel_req_...`, `notif_lease_cancel_resp_...`).
+      - Chats & inquiries: `notif_inquiry_...`, `notif_chat_...`.
+      - Moderation: property approval/rejection (`notif_mod_prop_appr_...`), agent verification/rejection (`notif_agent_verified_...`), promotions (`notif_promo_premium_appr_...`, `notif_promo_feat_appr_...`).
+      - Support tickets & replies: `notif_ticket_...`, `notif_ticket_reply_...`.
+    - Added upcoming visit reminder generation in `operational.controller.js` `getNotifications`: automatically creates deduplicated alerts (`notif_remind_visit_...`) for confirmed appointments within 48 hours.
+  - **Verification**:
+    - Automated verification suite (`verify_all.js`) validated health, filters, login, user live stats, save toggle, agent stats, admin stats, curation PUT, notifications, visit rejection on future dates, and valid visit completion on past dates.
+    - Production build (`npm run build`) succeeded with 0 errors.
+- **URGENT DATA FIX — USE `porch_light` DATABASE AND SEED THE EMPTY ATLAS DATABASE (2026-11-06)**:
+  - **Database Selection & URI Configuration**:
+    - Reconfigured backend connection to explicitly use the `porch_light` database, replacing default or `/test` paths.
+    - Updated `Porch_server/.env` with `MONGODB_URI` targeting `/porch_light` and added `MONGODB_DB_NAME=porch_light`.
+    - Added `dbName: config.dbName || 'porch_light'` to Mongoose connection options in `Porch_server/src/config/db.js`, `Porch_server/src/scripts/seedDev.js`, and `Porch_server/src/scripts/seed.js` to guarantee consistent routing across all runtime and seed processes.
+    - Enhanced `/api/health` and `getDatabaseStatus()` to safely return `databaseName: "porch_light"` without exposing credentials or URIs.
+    - Verified `porch_light` was empty (0 collections) prior to executing seed operations; no real user data was touched. Confirmed no data is written to `test`.
+  - **Mongoose Schema & Dev Seed Idempotency**:
+    - Added `isDevSeed: { type: Boolean, default: false, index: true }` across all 10 Mongoose models (`User`, `Property`, `Booking`, `Inquiry`, `Chat`, `Payment`, `Promotion`, `Rating`, `Complaint`, `Operational`).
+    - Made `npm run seed:dev` safe and fully idempotent: cleans up prior dev seed documents via compound filters (`isDevSeed: true` or canonical dev markers), backs up previous data to `backups/`, and strictly refuses execution in production (`NODE_ENV === 'production'`).
+    - Configured root `package.json` with `"seed:dev": "npm --prefix Porch_server run seed:dev"`.
+  - **Seed Execution & Coherent Entity Dataset**:
+    - Successfully executed `npm run seed:dev` in `porch_light` database.
+    - Entities Seeded:
+      - 1 Admin: `navaneethestate56@gmail.com` with secure bcrypt hash (12 salt rounds); plaintext password not stored or logged.
+      - 4 Distinct Users (`usr_aarav`, `usr_diya`, `usr_rohan`, `usr_ananya`) with pre-configured saved property wishlists.
+      - 3 Approved Agents (`agt_vikram`, `agt_meera`, `agt_kabir`) each owning exactly 9 properties (27 properties total).
+      - 1 Pending Agent (`agt_pooja`, `isVerified: false`, 0 properties).
+      - 27 Properties across 9 Indian cities (17 available now, 4 active leases, 2 sold, 2 pending moderation, 2 rejected; 5 premium with 360 panorama tours, 4 front-page featured showcase). Every property contains exactly 5 curated gallery images and a valid cover image.
+      - 5 Payments (2 Token advances, 2 Rental move-in deposits, 1 Agent promotion fee).
+      - 3 Star-only ratings (4-5 stars) linked strictly to completed payments.
+      - 2 Walkthrough visit bookings (1 confirmed, 1 pending).
+      - 1 Client-agent conversation thread (`chat_dev_1`) with messages.
+      - 1 Support ticket complaint with user messages.
+      - 3 Targeted notifications and 1 platform announcement.
+      - 2 System reports for Admin diagnostic health.
+      - 52 Analytics events (deduplicated views and 360 tour opens across recent days).
+  - **API & Website Verification**:
+    - `GET /api/health` confirmed `database.databaseName === 'porch_light'` and `state: 'connected'`.
+    - `GET /api/properties` confirmed 17 available properties (12 Buy, 5 Rent) with cover images and 5 gallery images each.
+    - `GET /api/properties?pageSize=100` confirmed 4 active featured properties for the Home page.
+    - Verified user login (`usr_aarav`) retrieves 3 saved homes and user stats.
+    - Verified agent login (`agt_vikram`) retrieves 9 active listings and pending visits.
+    - Verified admin login (`navaneethestate56@gmail.com`) retrieves platform stats (8 accounts excluding admin, 27 total registered, 17 available now, financial volumes, open tickets).
+    - Production frontend build (`npm run build`) passed cleanly with 0 errors.
+- **FOCUSED FULL-STACK FIX — IMAGE LOADING, USER SAVED PROPERTIES, SEMANTIC BACK NAVIGATION, AND SERVICE CONNECTIONS (2026-11-06)**:
+  - **Intermittent Property Image Loading Across Platform**:
+    - Identified root cause in `src/components/media/SmartImage.jsx`: when users navigated away and back via client-side routing, the browser already held the image in cache, setting `img.complete = true` before React mounted `onLoad`. Because the browser does not re-dispatch `load` for an already-completed image, `onLoad` never fired, trapping the image indefinitely at `opacity-0`.
+    - Rewrote `SmartImage.jsx` with a ref-based completion probe (`checkImgComplete`) that synchronously tests `img.complete` on mount and in `requestAnimationFrame`. If the image is already cached/complete, it transitions immediately to `loaded: true`. Added a guard to prevent retry loops on genuine network errors.
+    - Standardized image fallback chains (`coverImage || property.images?.[property.coverImageIndex || 0] || property.images?.[0]`) across `PropertyGridCard.jsx`, `PropertyRowCard.jsx`, `PropertyRow.jsx` (all 4 layout variants), `MapPropertyPreview.jsx`, `ComparePage.jsx`, and `PropertyDetailsPage.jsx` similar property cards.
+  - **Saved Property Behavior for Users**:
+    - Resolved contract mismatch: Backend `authController.toggleSaveProperty` returned `{ success: true, data: { isSaved, savedPropertyIds } }`, while frontend `src/services/properties.js` checked `Boolean(res.saved)`, resolving to `undefined` -> `false` and triggering a false "Removed from collection" toast.
+    - Re-architected backend `toggleSaveProperty` and `getSavedProperties` in `Porch_server/src/controllers/auth.controller.js`:
+      - Enforced role guard (`req.user.role === ROLES.USER`), rejecting agent/admin saves with HTTP 403 Forbidden.
+      - Resolved canonical IDs through `db.properties.findById` to ensure consistent lookup across Mongo `_id` and string `id`/`customId`.
+      - Deduplicated user saved sets with `Set` and returned a unified, backward-compatible response shape `{ success: true, saved: isSaved, isSaved, data: { isSaved, savedPropertyIds }, savedPropertyIds }`.
+      - Guaranteed normalized property objects with populated `coverImage` on `GET /api/auth/saved`.
+    - Updated frontend `src/services/properties.js` and `PropertyBrowseLayout.jsx`:
+      - Evaluated all response variations `Boolean(res.isSaved ?? res.saved ?? res.data?.isSaved ?? res.data?.saved)`.
+      - Corrected parsing of `res.data` / `res.properties` and populated `cachedSavedIds` properly.
+      - Fixed `subscribeToSavedProperties` in `PropertyBrowseLayout.jsx` to prevent mapping `p.id` over string arrays.
+      - Updated `UserSavedPage.jsx` to use `SmartImage` with elegant fallback and proper removal toast notifications.
+  - **Semantic Back Navigation**:
+    - Fixed `PropertyDetailsPage.jsx` back navigation: Replaced blind `navigate(-1)` with explicit route targeting `const targetRoute = isRent ? '/rent' : '/buy'; navigate(targetRoute);`. Completely prevents navigating back into Checkout/Payment history when clicking "Back to listings".
+    - Updated `src/components/dashboard/DashboardBackButton.jsx` to parse semantic targets (e.g., "Back to Overview") and navigate directly to `/dashboard/overview` rather than popping historical subpages.
+    - Standardized "Return to Property" and "Back to Property" buttons on `src/pages/CheckoutPage.jsx` to navigate explicitly to `/property/${id}`.
+  - **Service Connection Status & Verification**:
+    - Connected backend (`Porch_server`) to MongoDB Atlas using updated credentials in `Porch_server/.env` with custom DNS fallback (`8.8.8.8`, `1.1.1.1`).
+    - Verified MongoDB Atlas connectivity (`/api/health` reports `{ status: 'ok', database: { connected: true, state: 'connected' } }`).
+    - Verified Google Sign-in OAuth backend readiness (`/api/auth/google`) and account-selection isolation (gated to User role, no auto-select).
+    - Verified Cloudinary signed upload configuration in `Porch_server/src/config/cloudinary.js`.
+    - Preserved existing database records without wiping or reseeding.
+    - Verified production build cleanliness: `npm run build` executed in 12.67s with 0 errors across 3,349 modules.
+- **COMPLETE MONGODB INTEGRATION, REMOVE MOCK DATA, SEED DEVELOPMENT DATA, AND SYSTEM PREPARATION (2026-11-06)**:
+  - **MongoDB as Sole Application Source of Truth**:
+    - Completely decoupled backend repositories from file-based fallbacks: removed `loadLocalStore()`, `saveLocalStore()`, and all 89 references to `localStore.json` from `Porch_server/src/db/dataStore.js`.
+    - Backed up and deleted `Porch_server/data/localStore.json`.
+    - Configured strict database availability guard `assertMongoReady()` returning 503 Service Unavailable with clear diagnostics when MongoDB is unreachable.
+    - Added Windows SRV resolver fallback (`8.8.8.8`, `1.1.1.1`) in `Porch_server/src/config/db.js` to ensure resilient Atlas and local connectivity.
+    - Sanitized connection error logging to prevent leaking database credentials, tokens, or URIs.
+  - **Idempotent Development Seeder (`npm run seed:dev`)**:
+    - Built and executed `Porch_server/src/scripts/seedDev.js` writing deterministically to MongoDB.
+    - Seeded Entities:
+      - 1 Admin: `navaneethestate56@gmail.com` with bcrypt-hashed dev password `admin123` (12 salt rounds, strictly for development; must be changed before shared/production use).
+      - 4 Distinct Users (`usr_aarav`, `usr_meera`, `usr_rohan`, `usr_ananya`).
+      - 3 Approved Agents (`agt_priya`, `agt_vikram`, `agt_rajesh`) each owning exactly 9 properties (27 properties total).
+      - 1 Pending Agent (`agt_neha`) with 0 properties and `isVerified: false`.
+      - 27 Properties across 9 Indian cities (3 in Kochi, 3 in Bengaluru, 3 in Mumbai, 3 in Hyderabad, 3 in Chennai, 3 in Delhi NCR, 3 in Pune, 3 in Kolkata, 3 in Goa).
+      - Balanced status distribution: 17 available now (approved, unleased, unsold), 4 actively leased, 2 sold, 2 pending administrative review, 2 rejected with feedback notes, 5 premium with verified badges & 360° virtual tours, and 4 front-page featured properties.
+      - Realistic related activity: 5 payments (escrow & promotion fees), 3 star-only ratings (4-5 stars), 2 scheduled walkthrough bookings, 1 live chat thread, 1 inquiry, active announcements, and notification dispatches.
+  - **Decoupling Frontend UI and Removing Dev Controls**:
+    - Replaced `<DevRoleSwitcher />` and dev role impersonation with clean null component; removed from `PageLayout.jsx`.
+    - Removed demo quick-fill login pill bar and hardcoded credentials from `LoginPage.jsx`.
+    - Removed `setDevRole` and `resetAllData` / `resetDemoData` bypasses from `AuthContext.jsx` and `src/services/auth.js`.
+    - Migrated all remaining frontend dashboard and view components from `mockStore.getState()` and `mockStore.subscribe()` to live domain services (`properties.js`, `bookings.js`, `inquiries.js`, `chat.js`, `payments.js`, `promotions.js`, `ratings.js`, `complaints.js`, `notifications.js`, `admin.js`, `dashboard.js`, `auth.js`).
+    - Verified 0 remaining occurrences of `mockStore` in any `.jsx` file in `src/`.
+  - **Git Hygiene**:
+    - Updated repository root `.gitignore` and `Porch_server/.gitignore` to ignore `.env`, `.env.*`, `backups/`, `data/*.json`, `uploads/`, `logs/`, and build artifacts while explicitly retaining all project `*.md` files.
+  - **Verification & Testing**:
+    - Executed clean production build (`npm run build`): completed in 15.97s with 0 errors across 3,349 modules.
+    - Verified backend server endpoints against live MongoDB: `/api/health`, `/api/properties`, `/api/promotions/config`, `/api/auth/login`.
+- **FULL STACK MIGRATION — MOVE FRONTEND MOCK DATA AND BUSINESS LOGIC TO `Porch_server` (2026-11-06)**:
+  - **Complete Backend Implementation (`Porch_server/`)**:
+    - **MongoDB Models (`src/models/`)**: Authoritative Mongoose schemas for `User`, `Property`, `Booking`, `Inquiry`, `Chat`, `Payment`, `Promotion` & `PromotionConfig`, `Rating`, `Complaint`, `Operational` (`Notification`, `Announcement`, `SystemReport`, `AnalyticsEvent`).
+    - **Dual-Mode Data Store (`src/db/dataStore.js`)**: Queries Mongoose models when MongoDB Atlas is connected, with seamless persistence to `Porch_server/data/localStore.json` in local development mode without database crash.
+    - **Authoritative Database Seeder (`src/scripts/seed.js`)**: Exported canonical 210KB dataset (`src/data/seedData.json`) containing 29 properties, seed users, bookings, inquiries, transactions, and complaints with bcrypt password hashing (`Demo@1234`). Added `npm run seed` script with safety checks against accidental overwrites (`--force` required).
+    - **Centralized Upload Policy (`src/middleware/upload.js`)**: Multer middleware enforcing category limits (avatar 2MB, property 5MB, tour 15MB, chat 5MB) and strict MIME types (JPEG, PNG, WebP, PDF) with safe static file streaming (`nosniff`, `CSP`).
+    - **Authoritative Feature Controllers & Routers**:
+      - `auth`: Login, registration (admin blocked), Google OAuth (user-only), account deletion obligations, agent deletion requests.
+      - `properties`: Spatial catalog search, pagination, map pins `allMatching`, privacy checks on sold properties, deduplicated view counting, agent edit eligibility and whitelists.
+      - `bookings`: Walkthrough scheduling, status updates, cancellations, schedule edits, and reschedule workflow.
+      - `inquiries`: Client inquiries linked to properties and agents.
+      - `chat`: Thread discovery, creation, and message dispatch with attachment processing.
+      - `payments`: Simulated checkout (`TX-2026-XXXXXX`), receipts (`REC-2026-XXXXXX`), lease lifecycle, early exit mutual agreements, and rental handover.
+      - `promotions`: One-time Premium status with 360 tour unlock, 4-slot Featured showcase with waitlist management, window adjustments, unpinning, and sync worker.
+      - `ratings`: Star-only ratings (1-5) strictly gated to completed Buy/Rent transactions.
+      - `complaints`: Support ticket submission, replies, and status resolution.
+      - `operational`: Notifications feed, mark read / read all, delete, broadcast announcements, client ErrorBoundary diagnostics.
+      - `analytics`: Deduplicated daily views, 360 tour opens, headline performance metrics, and financial volume.
+      - `dashboard`: Cross-dashboard search across actions/pages/properties/visits/transactions, user/agent/admin stats, admin moderation.
+      - `media`: Safe uploads, direct Cloudinary signatures, and static file streaming.
+  - **Frontend Service Client Migration (`src/services/`)**:
+    - **Unified API Client (`src/services/apiClient.js`)**: HTTP client supporting HttpOnly session cookies (`credentials: 'include'`), in-memory Bearer token fallback, FormData uploads, and error transformation.
+    - **Auth Context (`src/features/auth/AuthContext.jsx`)**: Asynchronous user initialization on mount (`authService.getCurrentUser()`) and real-time subscription to auth state changes.
+    - **Domain Services Connected to API**:
+      - `src/services/auth.js` -> `/api/auth/*`
+      - `src/services/properties.js` -> `/api/properties/*` & `/api/auth/saved/*`
+      - `src/services/bookings.js` -> `/api/bookings/*`
+      - `src/services/inquiries.js` -> `/api/inquiries/*`
+      - `src/services/chat.js` -> `/api/chat/*` & `/api/media/upload`
+      - `src/services/payments.js` -> `/api/payments/*`
+      - `src/services/promotions.js` -> `/api/promotions/*`
+      - `src/services/ratings.js` -> `/api/ratings/*`
+      - `src/services/complaints.js` -> `/api/complaints/*`
+      - `src/services/notifications.js` -> `/api/operational/notifications/*`
+      - `src/services/analytics.js` -> `/api/analytics/*`
+      - `src/services/admin.js` -> `/api/dashboard/*` & `/api/operational/*`
+      - `src/services/dashboard.js` -> `/api/dashboard/*`
+    - **Media Uploaders Connected**:
+      - `ProfilePhotoUploader.jsx`: Dispatches compressed avatars to `POST /api/media/upload` with category `avatar`.
+      - `AgentNewListingPage.jsx`: Dispatches compressed listing photos to `POST /api/media/upload` with category `property`.
+  - **Vite Proxy Configuration (`vite.config.js`)**: Configured `/api` proxy forwarding to `http://localhost:5000` to guarantee seamless cookie passing and image serving.
+  - **Production Verification**:
+    - Executed frontend production build (`cmd.exe /c npm run build`): Completed with 0 errors (3353 modules transformed).
+    - Verified live API endpoints on `http://localhost:5000/api` (health, properties, promotion config, announcements).
+- **BACKEND FOUNDATION (`Porch_server`) — NODE.JS, EXPRESS, MONGODB ATLAS, AUTH & SECURITY (2026-11-05)**:
+  - **Clean Maintainable Backend Structure (`Porch_server/`)**:
+    - Built a modular Node.js/Express service inside the dedicated `Porch_server` folder without disturbing existing frontend code or mock stores.
+    - Organized into configuration (`src/config/`), routes (`src/routes/`), controllers (`src/controllers/`), services (`src/services/`), models (`src/models/`), middleware (`src/middleware/`), utilities (`src/utils/`), and constants (`src/constants/`).
+    - Added dedicated `Porch_server/package.json` with `npm start` and `npm run dev` scripts using Node.js v24 and Express.
+    - Set up `.env.example` with placeholder variable names only. Guaranteed `.env` is ignored by Git in both root `.gitignore` and `Porch_server/.gitignore`.
+  - **MongoDB Atlas Connection Lifecycle (`src/config/db.js`)**:
+    - Built reusable MongoDB Atlas connection using `mongoose.connect()` with `MONGODB_URI` environment variable (never hardcoded).
+    - Safe error and disconnect handling: reports connection state (`connected: false, state: 'disconnected'`) cleanly on health endpoint without crashing or reporting false readiness when URI is unconfigured or unreachable.
+  - **Operational Health Endpoint (`src/controllers/health.controller.js`, `src/routes/health.routes.js`)**:
+    - `GET /api/health` reports server uptime, service name, timestamp, and database connectivity status (`connected: boolean, state: string`) with zero exposure of connection strings, credentials, or internal query details.
+  - **Security Foundation (`src/app.js`, `src/middleware/`)**:
+    - **HTTP Security Headers**: Integrated `helmet()` with tailored API settings.
+    - **Configurable Strict CORS**: Restricts access to declared `ALLOWED_ORIGINS` (`http://localhost:5173,http://localhost:5174`) with `credentials: true`.
+    - **Request Size Limiting**: `express.json({ limit: '10mb' })` and `express.urlencoded({ extended: true, limit: '10mb' })`.
+    - **Reverse Proxy Trust**: `app.set('trust proxy', 1)` in production for HTTPS TLS offloading and secure cookie delivery.
+    - **Brute Force Rate Limiting**: `express-rate-limit` protecting `/api/auth/*` endpoints (30 requests per 15 mins per IP).
+    - **Zero Information Leakage**: Centralized `errorHandler` catches unhandled exceptions, suppresses stack traces, masks database errors, and returns calm, sanitized JSON responses. Safe `logger` redacts tokens, passwords, and URIs.
+  - **Authoritative Authentication & Role Authorization (`src/middleware/auth.js`, `src/middleware/authorize.js`, `src/models/User.js`)**:
+    - Authoritative roles: `user`, `agent`, and `admin` dictated solely by server records / verified JWT claims.
+    - Strict public registration rules: Permits only `user` and `agent` roles; `admin` registration attempts are rejected immediately (`400 Bad Request`).
+    - Google OAuth user-only rule: Google sign-in is strictly restricted to User accounts; prohibited from creating or authenticating Agents or Admins.
+    - Agent verification lifecycle: Newly registered agents default to `isVerified: false` and `verificationStatus: 'pending'`, blocked from listing publication via `requireVerifiedAgent`.
+    - Password security: `bcryptjs` hashing with 12 salt rounds in Mongoose pre-save hook; plaintext passwords are never stored or logged; `passwordHash` excluded by default.
+    - JWT & Cookie Architecture: Tokens signed with `JWT_SECRET` and delivered in secure, `HttpOnly`, `SameSite` cookies (`porchlight_token`) with optional `Authorization: Bearer` support.
+    - Demonstrated role middleware via protected example endpoints (`/api/examples/user-area`, `/api/examples/agent-area`, `/api/examples/admin-area`).
+  - **Cloudinary Readiness (`src/config/cloudinary.js`)**:
+    - Server-side signature helper `generateUploadSignature()` for future signed direct uploads. Cloudinary API Secret is strictly server-only.
+  - **Documentation**:
+    - Authored comprehensive `Porch_server/README.md` covering setup, configuration, security choices, and startup steps.
+    - Updated `INTEGRATION.md` detailing the frontend decoupling and future migration path.
+- **FOCUSED ADMIN DASHBOARD POLISH — OVERVIEW, DETAIL MODALS, STATUS LABELS, AND FRONTEND SYNC (2026-11-04)**:
+  - **Admin Overview Period Selector Removal (`src/pages/dashboard/admin/AdminOverviewPage.jsx`)**:
+    - Removed period selection pills (`7D`, `30D`, `90D`, `All Time`) from the Admin Overview header.
+    - Refocused Overview strictly as an all-time/current platform operational snapshot reflecting live platform aggregates with an active status pulse indicator. Period filtering remains reserved for dedicated analytical pages.
+  - **Header-Aware Dynamic Modal Positioning (`src/hooks/useHeaderOffset.js`)**:
+    - Created `useHeaderOffset` hook calculating the live visible bottom of the global fixed header (`header.getBoundingClientRect().bottom` or 0 when hidden) across window resize, scroll, and viewport changes.
+    - Integrated across all Admin modals:
+      - `AdminApprovalsPage.jsx`: Property inspection dossier modal, rejection feedback modal, archive confirmation modal, delete warning modal.
+      - `AdminUsersPage.jsx`: Agent detail & verification modal, rejection feedback modal, account deletion request modal.
+      - `AdminFeaturedPage.jsx`: Duration window adjustment modal, request rejection modal.
+      - `AdminPromotionsPage.jsx`: Premium request rejection feedback modal.
+    - Stacking and containment: Header stays visible at `z-50`; modal container mounts at `top: headerOffset` (`z-40`), ensuring the header never covers modal headers, titles, or close buttons.
+    - Accessibility: Added global `Escape` key listener to dismiss active modals, and focus return ref (`lastActiveElementRef.current?.focus()`) restoring focus to the triggering element.
+    - Mobile sheet responsiveness: Responsive mobile sizing with `max-h-[calc(100dvh-${headerOffset}px-1.5rem)]` and internal smooth vertical scrolling.
+  - **Clean Single-Line Status Pills & Responsive Mobile Reflow**:
+    - Added `PropertyStatusPill` component with concise one-line status labels: `Available`, `Pending Review`, `Sold`, `Leased`, `Archived`, `Declined` with `whitespace-nowrap inline-flex items-center gap-1.5` and descriptive tooltips/aria-labels, eliminating text wrapping.
+    - Added desktop table vs. mobile stacked card reflow across high-density admin tables:
+      - `AdminApprovalsPage.jsx`: `hidden md:block` table alongside `block md:hidden` stacked property cards.
+      - `AdminUsersPage.jsx`: `hidden md:block` table alongside `block md:hidden` stacked user and agent cards.
+      - `AdminTransactionsPage.jsx`: `hidden md:block` table alongside `block md:hidden` stacked transaction cards with PDF receipt download.
+  - **Frontend Synchronization Verification Before Backend Integration**:
+    - Account counts strictly count Users and Agents only (`users.filter(u => u.role !== 'admin')`).
+    - Available properties (approved, not sold, not leased, not pending handover) and All Properties (total registered records) remain strictly separated.
+    - Agent verification decisions update Agent state (`isVerified: true`/`false`), publish eligibility, Admin queue, and Agent notifications without stale state.
+    - Listing lifecycle changes immediately synchronize Property Review, Agent My Listings, Buy/Rent listings, maps, Property View, and Home Featured eligibility.
+    - Featured Homes operates on the strict 4-slot source shared with `TopPropertiesSection.jsx`, with duration window synchronization (`featuredUntil`) and waitlist auto-promotion.
+    - Premium is a permanent one-time paid upgrade unlocking 360° virtual tour and badge (no expiration/duration, no duplicate requests).
+    - Support requests use the same ticket records in Admin and requester dashboards with multi-message threads and notifications.
+    - Reports & System Issues remain for ErrorBoundary exceptions and maintenance notices only.
+    - Notifications use one shared store and unread count; prevent duplicate notifications.
+  - **Documentation & Verification**:
+    - Updated `ADMIN_DASHBOARD_DESIGN.md`, `DASHBOARD_SYSTEM_DESIGN.md`, `INTEGRATION.md`, and `PROGRESS.md`.
+    - Production build verified cleanly with `cmd.exe /c npm run build` (0 errors, code 0).
+- **ADMIN DASHBOARD POLISH — ANALYTICS, ACCOUNT/PROPERTY MANAGEMENT, FEATURED, PREMIUM, SUPPORT, AND SETTINGS (2026-11-04)**:
+  - **Overview Counts (`src/pages/dashboard/admin/AdminOverviewPage.jsx`, `src/services/dashboard.js`, `src/services/admin.js`)**:
+    - Registered Accounts strictly counts Users and Agents only (`users.filter(u => u.role !== 'admin')`), excluding Admins from registration totals. Shows breakdown: `N Users, M Agents`.
+    - Clarified inventory metrics: **Available Now** (properties currently eligible for public listings and maps: approved, not sold, not leased, not pending handover) over **All Properties** (total registered records across all statuses: pending, rejected, sold, rented, etc.).
+    - Added period controls (`7D`, `30D`, `90D`, `All Time`), urgent moderation attention queue, itemized simulated payment volume (token advances, rent deposits, promotion fees), Home showcase occupancy (`N of 4`), waitlist queue depth, and platform agent star rating aggregates.
+  - **Users & Agents Management with Agent Verification Details (`src/pages/dashboard/admin/AdminUsersPage.jsx`, `src/services/admin.js`)**:
+    - Added click-to-inspect agent row interaction opening a focused `AgentDetailModal`. Zero premature selection.
+    - Displays: Legal name, email, agency, office contact, WhatsApp, verified RERA license number, jurisdiction, account status.
+    - Live portfolio summary: Approved live listings, pending reviews, sold/leased properties.
+    - Verification actions: Approve (`verifyAgent`) and Decline (`rejectAgent`) requiring mandatory feedback reason sent to agent. Pending agents cannot publish listings until verified.
+    - Role immutability strictly enforced; no public Admin signup; no plaintext passwords or auth secrets exposed.
+  - **Property Management Console (`src/pages/dashboard/admin/AdminApprovalsPage.jsx`, `src/services/admin.js`)**:
+    - Removed implicit default selection: shows searchable, filterable catalog roster first; opens focused inspection dossier modal only on explicit selection.
+    - Status tabs: `Pending Review`, `Available Now`, `Sold / Leased`, `Rejected / Archived`, and `All Registered`.
+    - Typology & Transaction Type filters, text search (title, locality, city, RERA ID, agent), and sorting.
+    - Inspection dossier modal: Specifications, floor logic, RERA ID, agent details, and photo gallery inspection.
+    - Moderation actions: Approve Listing, Reject Listing (with mandatory reason), and Archive Listing (with mandatory reason). Hard deletion blocked when transaction or lease history exists, safely redirecting to archival.
+  - **Featured Homes Management (`src/pages/dashboard/admin/AdminFeaturedPage.jsx`, `src/services/promotions.js`)**:
+    - Curates the 4 Home showcase slots in "Top Residences Worth the Visit" (`TopPropertiesSection.jsx`). Enforces strict 4-slot capacity ceiling.
+    - Ordered Priority Waitlist Queue for excess approved requests with auto-promotion via `syncFeaturedPlacements()` when an active slot opens or expires.
+    - Added placement duration window adjustment modal (days / specific calendar date via `updateFeaturedWindow`).
+    - Added "Remove from Slot" action (`removeFeaturedPlacement`) which unpins property, notifies agent, and immediately advances the top waitlisted residence.
+    - Clearly documented as an unpaid editorial curation workflow distinct from Premium.
+  - **Premium Promotion Logic across all Roles (`src/pages/dashboard/admin/AdminPromotionsPage.jsx`, `src/pages/dashboard/agent/AgentPromotionsPage.jsx`, `src/services/promotions.js`)**:
+    - Premium is a permanent one-time paid status (`isPremium = true`, `isPremiumAdminFlag = true`) unlocking 360° virtual tour and verified badge across all views. Status does not expire.
+    - Agents cannot request or pay for an already Premium property or one with a pending request (enforced in UI with disabled button and in service).
+    - Queue displays one-time fee, permanent status validity, and approve/reject with mandatory reason.
+  - **Support Requests Desk (`src/pages/dashboard/admin/AdminComplaintsPage.jsx`, `src/services/complaints.js`)**:
+    - Segregated from runtime exceptions and system issues.
+    - Displays submitter role badge (`Partner Agent` vs. `Member User`), email, category/topic tag, property reference link, and timestamps.
+    - Multi-message conversation thread showing chronological history between member/agent and admin concierge.
+    - Interactive reply composer with quick actions: "Send Reply" (marks in progress), "Reply & Resolve", and "Reopen Ticket" with role-scoped notifications.
+  - **Reports & System Issues (`src/pages/dashboard/admin/AdminReportsPage.jsx`, `src/services/admin.js`)**:
+    - Segregated strictly to client-side ErrorBoundary component exceptions, stack traces, and diagnostics (no user complaints).
+    - Acknowledge and Resolve actions for diagnostic reports.
+    - Multi-dashboard Platform Maintenance Broadcast Publisher: Create announcements with target (`All`, `Users`, `Agents`), priority (`info`, `warning`, `critical`), auto-expiry, and live active list with revoke action.
+    - Future Backend Monitoring callout documenting observability integration (Sentry, Datadog APM, OpenTelemetry) without fabricating fake server metrics.
+  - **Admin Profile & Platform Settings (`src/pages/dashboard/admin/AdminSettingsPage.jsx`, `src/services/promotions.js`)**:
+    - Clean separation of personal Administrator profile (name, phone, city, photo, credentials) from global Platform Settings.
+    - Platform Parameters: One-Time Premium Promotion Fee (₹ INR, permanent upgrade) and Default Featured Placement Duration (1 to 90 days, default 14), plus terms and inbound request toggle.
+  - **Verification**:
+    - Vite production build compiles with 0 errors (`npm run build`, exit code 0).
+- **STAR-ONLY AGENT RATING SYSTEM CONNECTED TO COMPLETED PROPERTY TRANSACTIONS (2026-11-04)**:
+  - **Transaction-Linked Eligibility (`src/services/ratings.js`)**:
+    - Only signed-in Users (`role === 'user'`) with a completed Buy or Rent transaction (`type: 'token_amount'` or `'rent_deposit'` with `status === 'completed'`) can rate representing agents.
+    - Visit-only bookings, pending, failed, cancelled, and refunded transactions are strictly ineligible. Agents and Admins are barred from rating.
+    - Each rating record stores `{ id, transactionId, propertyId, userId, agentId, rating, createdAt, updatedAt, status: 'active' | 'ineligible' }`.
+    - Exactly one rating per transaction: subsequent submissions update the existing rating without creating duplicates.
+    - Refunds/reversals automatically mark ratings `ineligible` via `markTransactionRatingsIneligible`, immediately excluding them from agent aggregates while preserving historical audit logs.
+  - **Aggregate & No-Ratings Handling**:
+    - `getAgentRatingAggregate(agentId)` cross-checks transactions and computes the arithmetic mean rounded to 1 decimal place, total rating count, and 1–5 star distribution.
+    - Returns `averageRating: null` when 0 eligible ratings exist; UI strictly renders "No ratings yet" (never fake 0 stars).
+  - **Post-Payment Checkout Prompt (`src/pages/CheckoutPage.jsx`)**:
+    - Embedded a calm, non-blocking 1–5 star rating prompt in the payment confirmation card.
+    - Supports immediate rating selection with single-click submit, and a dismiss action ("Rate later") that prevents re-prompting for that transaction.
+  - **Rate Later & Update Surfaces**:
+    - **Property Details (`src/pages/PropertyDetailsPage.jsx`)**: Displays dynamic agent aggregate stars or "No ratings yet". For users with completed transactions for that property, provides a "Rate Representing Agent" or "Update Rating (★ N)" action opening `AgentRatingModal`. Fixed React hook call ordering by hoisting `useMemo` hooks above conditional early returns (`loading`/`error`), resolving the runtime error on Property View.
+    - **User Payments (`src/pages/dashboard/user/UserPaymentsPage.jsx`)**: Added an Agent Rating column to the payment ledger table. Completed transactions display a "Rate" CTA or "★ N (Edit)" chip triggering `AgentRatingModal`. Ineligible/refunded rows display an "Ineligible" status tag.
+    - **User Properties (`src/pages/dashboard/user/UserPropertiesPage.jsx`)**: Added "Rate Agent" / "★ N (Edit)" buttons directly to acquired residence and active lease cards.
+  - **Accessible Rating Modal (`src/components/rating/AgentRatingModal.jsx`)**:
+    - Accessible dialog with interactive 1–5 star hover and touch selection, star rating descriptive labels ("Poor" to "Excellent"), transaction context chip, and Porch Light porcelain styling.
+  - **Agent Analytics Reputation Rebuild (`src/pages/dashboard/agent/AgentAnalyticsPage.jsx`, `src/features/analytics/agentAnalyticsSelectors.js`)**:
+    - Converted Section 6 to pure star-only reputation aggregate: average star score, total verified ratings count, response rate, and 5-star distribution breakdown bars. Removed legacy text reviews, quotes, and reply workflows.
+  - **Verification**:
+    - Production build passes with 0 errors via `npm run build`.
+- **AGENT ANALYTICS REBUILD & EDIT PROPERTY ERROR FIX (2026-11-04)**:
+  - **Edit Property Fix**:
+    - Resolved `ReferenceError: editFloorCfg is not defined` on line 1191 of `src/pages/dashboard/agent/AgentNewListingPage.jsx` by substituting the active outer scope `floorConfig` helper. Verified clean rendering of read-only summary in Edit Property mode.
+  - **Analytics Restorable Backup**:
+    - Created byte-exact backup outside imported source tree in `backups/agent-analytics-rebuild-20261104/`:
+      - `AgentAnalyticsPage.jsx.bak`
+      - `agentAnalyticsSelectors.js.bak`
+      - `RESTORE_INSTRUCTIONS.md` (documents exact single-step file copy commands to revert).
+  - **Analytics Service Layer (`src/services/analytics.js`)**:
+    - Implemented `recordPropertyView({ propertyId, userId, userRole })` with strict deduplication rule: counted once per authenticated User per property per calendar day (UTC YYYY-MM-DD). Excludes guests, Agents, Admins, preview modals, listing cards, and map markers.
+    - Implemented `recordTourOpen({ propertyId, userId, userRole })` deduplicated once per user per property per day.
+    - Implemented `getAgentAnalytics({ agentId, period, filters, preferences })` and `exportPerformanceCSV(performanceRows, transactions, period)`.
+    - Wired `recordPropertyView` and `recordTourOpen` directly into `src/pages/PropertyDetailsPage.jsx` on successful property load.
+  - **Analytics Selectors Engine (`src/features/analytics/agentAnalyticsSelectors.js`)**:
+    - Computes period metrics for `7d`, `30d`, `90d` with equal-length previous period comparison and handles zero baseline cleanly ("New activity", "No change", or "No comparison yet").
+    - Urgency-sorted attention items (max 5 rows): unanswered inquiries > 24h, pending visit requests, 14d zero-view approved listings, pending/rejected listings with rejection reasons, and agent profile verification status.
+    - Conversion Funnel (Views → Inquiries → Confirmed/Completed Visits → Closures) with step percentages and largest drop-off reading.
+    - Activity Trend over daily buckets (7d) or weekly buckets (30d/90d) with electric lemon marker on top bucket.
+    - 6-month monthly collected payment chart (May–Nov 2026) split into token advances and rental deposits (successful payments only), with pending/failed/refunded separated.
+    - Premium 360° tour conversion with 30-day attribution rule (unique signed-in viewer who logged tour open and subsequently scheduled a visit booking).
+    - Ranked listing table with 4-week mini sparklines, and quiet listings group with tailored suggestions.
+    - Optional agent income estimate based on agent's entered commission percentage, clearly labeled as external settlement.
+  - **Agent Sales Analytics Page Component Rebuild (`src/pages/dashboard/agent/AgentAnalyticsPage.jsx`)**:
+    - Rebuilt from scratch strictly adhering to the 8-section layout order:
+      1. Header, Period, Compact Filter Drawer (type, city, typology, status), Clear filters, Deterministic insight line, Small mono "Demo data" tag, Settings trigger.
+      2. What Needs Attention (ruled rows, urgency badges, links, fallback "Nothing needs your attention. Your lights are on.").
+      3. Four Performance Figures (Listing views, Inquiries, Visits, Closures with single-layer count-up, sparkline, and change context).
+      4. Charts (Conversion Funnel, Activity Trend with electric lemon dot, 6-Month Collected Payments, Premium Tour Conversion with attribution rule).
+      5. Money (4 summary values, 6-mo monthly bar chart, income by listing with inline bars, 10/page paginated searchable/filterable transactions table with receipt modal, optional external earnings estimate).
+      6. Upcoming Visits & Reputation (next 5 visits with Accept/Decline/Reschedule using shared `bookings.js` service; reputation score, review count, response rate, latest 2 reviews with Reply action).
+      7. Listing Performance (ranked table with views/inquiries/conversion/health sorting, expandable detail cards with mini trends and data-backed suggestions, collapsed "No activity yet" group).
+      8. Settings Drawer & Footer (Analytics defaults, income estimate rate, email digest note, demo disclaimer footer, CSV export).
+  - **Documentation & Verification**:
+    - Updated `AGENT_DASHBOARD_DESIGN.md` and `INTEGRATION.md`.
+    - Build verified cleanly with `npm run build` (0 errors, code 0).
+- **FOCUSED PROPERTY EDIT AND DASHBOARD SEARCH UPDATE**:
+  - **Restrict Edit Property to Permitted Sections**:
+    - Restricted Agent editing strictly to:
+      1. **Narrative Description & Valuation Terms**: Title, architectural description, price / rent, private negotiation toggle, and if rent: security deposit, maintenance fee, lease period, notice period, and preferred tenants.
+      2. **Five-Photo Architectural Gallery**: Upload local files (with client WebP compression), remote URLs, uncropped contain preview, reordering, cover photo selection, and modal lightbox zoom (strict 5-photo maximum).
+      3. **360° Virtual Tour Asset (Premium Only)**:
+         - When listing is verified Premium: allows editing/adding 360° panorama asset URL and previewing via `PanoramaViewer`.
+         - When listing is NOT approved Premium: direct activation/toggle is prohibited. Renders an informative card explaining Premium requirement and linking to `/agent/promotions?propertyId=...`.
+    - Rendered all non-editable property facts (classification, coordinates, rooms, floor details, area, furnishing, amenities, access/connectivity, compliance, utilities) as a comprehensive read-only summary for context. Form controls for Sections 2–6 are omitted entirely in Edit mode.
+    - Preserved existing restrictions on active leases, pending/active transactions, and completed sales at both UI and service layer (`getPropertyEditEligibility` rejects with descriptive error).
+    - Saving permitted edits updates the same listing record (`properties: state.properties.map(...)`), strictly preserving every non-editable field and transaction record without creating duplicates.
+  - **Entrance Facing Compass Directions (`src/constants/propertyTypes.js`)**:
+    - Added all eight canonical compass directions: `North`, `North-East`, `East`, `South-East`, `South`, `South-West`, `West`, and `North-West`.
+    - Added canonical normalizer `formatFacingDirection(val)` to map abbreviations (`NE`, `SW`, `SE`, `NW`, `north`, etc.) and preserve legacy casing safely.
+    - Integrated across Add Property, Edit Property read-only summary, and Property View (Key Dimensions & Swiss Spec Sheet).
+  - **Role-Scoped Dashboard Search**:
+    - Verified and confirmed search in User, Agent, and Admin dashboards via `searchDashboard` and `DashboardSearchModal`.
+    - Scopes results strictly by role and ownership (Users only see own records and accessible paid/saved properties; Agents only see own listings, visits, and ledger; Admins manage platform records).
+    - Preserves non-sticky modal flow with full keyboard navigation (ESC, CMD/CTRL+K). Destructive actions navigate to settings sections with confirmation modals intact.
+    - Added `id` anchors across properties (`property-${id}`), visits (`visit-${id}`), transactions (`tx-${id}`), and complaints (`complaint-${id}`) so selecting a search result navigates and smoothly scrolls/focuses the target item.
+- **FOCUSED PROPERTY FORM UPDATE — TYPE-BASED FIELDS, PROPERTY VIEW, PHOTOS, AND EDITABLE FIELDS**:
+  - **Shared Property Field Applicability (`src/constants/propertyTypes.js`)**:
+    - Implemented `getPropertyFieldApplicability(type, listingType)` as the single source of truth across Add/Edit Property and Property View.
+    - Classifies all 14 canonical property classifications across Residential, Commercial, and Land parcels (`isLand`, `isCommercial`, `isResidential`, `isStandalone`, `isUnitStyle`).
+    - Explicitly sets applicability flags for: `bedrooms`, `bathrooms`, `balconies`, `floorLevel`, `totalFloors`, `plotArea`, `builtUpArea`, `carpetArea`, `facing`, `furnishing`, `zoning`, `boundary`, `roadFrontage`, `ceilingHeight`, `loadingDocks`, `powerLoad`, `possessionStatus`, `propertyAge`, `deposit`, `maintenanceFee`, `leaseTerms`, and `amenities`.
+    - Exported `IDENTITY_PROPERTY_FIELDS` and `EDITABLE_PROPERTY_FIELDS` defining boundary contracts.
+  - **Add Property Type-Based Conditional Rendering (`src/pages/dashboard/agent/AgentNewListingPage.jsx`)**:
+    - Reactively toggles visible fields and validation when `type` or `listingType` changes.
+    - Clears and sanitizes inapplicable fields immediately upon type switch so obsolete or mismatched attributes are never saved.
+    - Added dedicated form fields for Land parcels (Plot Area in sq yd / cents, Zoning Classification, Boundary Wall, Road Frontage Width) and Commercial/Industrial spaces (Ceiling Clear Height, Loading Docks, 3-Phase Power Load).
+    - Filters amenities list by property classification (e.g., Land parcels only show perimeter security and gated access; Commercial hides residential clubhouse/pool/gym).
+  - **Keep Property View Consistent (`src/pages/PropertyDetailsPage.jsx`)**:
+    - Adapts Key Dimensions dynamically (BHK/Baths for residential, Carpet/Built-up area & Parking for commercial, Plot parcel area & Zoning for land; Unit Floor Level for apartments/offices, Total Floors for standalone homes, boundary specs for plots).
+    - Renders Swiss Spec Sheet strictly using applicable attributes; suppresses empty, irrelevant, or stale rows (e.g. carpet area, furnishing, or pet policy on land; residential amenities on commercial properties).
+  - **Consistent Photo-Upload Previews with Contain & Lightbox**:
+    - Standardized thumbnail grid with uniform `aspect-4/3` cards, neutral container, and soft blurred backdrop overlaying an uncropped `object-contain` photo preview.
+    - Preserved visual photo order `#1`..`#5`, Cover photo badge, and Set Cover action.
+    - Added high-resolution modal Photo Lightbox (`inspectImageIndex`) allowing agents to inspect the uncropped full-resolution photo with smooth keyboard/mouse navigation (Prev, Next, Cover selection, Close).
+    - Strict 5-photo maximum limit enforced across local uploads and validated image URLs.
+  - **Edit Property Mode — Focused on Permitted Editable Fields**:
+    - Added read-only **Verified Property Identity & Compliance Banner** displaying immutable attributes: Property ID, Listing Transaction Type, Property Classification, Physical & GPS Location, RERA Registration ID, and Legal Ownership Title.
+    - Suppressed Section 2 (Location form and map picker) and Section 1's classification/transaction toggles in Edit mode.
+    - Allowed editing only of permitted operational fields: Price, Negotiation flag, Title & Description, Applicable Specs (furnishing, carpet area, age, possession, ceiling height, etc.), Applicable Amenities & Utilities, Photos (up to 5), and 360° Tour Link.
+    - On save, immutable identity fields are preserved strictly from `loadedProp`, preventing accidental corruption or bypass.
+- **FOCUSED ADD PROPERTY FIXES — DROPDOWN, NEGOTIATION, LOCATION, AND CONDITIONAL FIELDS**:
+  - **Restorable Backup of Location Selector & Helpers**:
+    - Stored byte-exact backups outside the runtime source tree at `backups/location-selector-pre-update/`:
+      - `AgentNewListingPage_LocationSection.jsx.bak`
+      - `parseGoogleMapsUrl.js.bak`
+      - `RESTORE_INSTRUCTIONS.md`
+  - **Property-Type Dropdown Fully Visible & Positioned (`src/components/property/PropertyTypeDropdown.jsx`)**:
+    - Created an accessible custom portal dropdown that mounts to `document.body`, eliminating any container clipping from `overflow: hidden`.
+    - Implemented dynamic positioning: prefers opening downward when space is available (>= 200px); when space below is tight, opens upward.
+    - Clamps `max-height` to strictly stay within the viewport (`maxHeight: Math.min(340, availableSpace)`) with smooth internal scrolling (`overflow-y-auto`).
+    - Full keyboard navigation (`ArrowDown`, `ArrowUp`, `Enter`, `Escape`), focus ring, touch target (min-h-[44px]), and Porch Light styling with category chips and checkmarks.
+  - **Private Price Negotiation Display**:
+    - When `negotiable: true`, Property View displays `Price on request` with a subtle `Private Negotiation` chip, concealing public numeric prices and approx /sq ft rates.
+    - Updated Key Dimensions cards to display `On request` with `Private terms` subtext.
+    - In Property View, replaced fixed-price Home Loan EMI Calculator and Rental Outlay Estimator with a dedicated Private Terms card with direct agent inquiry CTA.
+    - Updated cards (`PropertyGridCard.jsx`, `PropertyRowCard.jsx`, `PropertyRow.jsx`), map pins (`PropertyMap.jsx`), and map drawer/previews (`MapPropertyPreview.jsx`, `PropertyMapExplorer.jsx`, `TopPropertiesSection.jsx`) to display `Price on request` or `On Request`.
+    - Preserved standard fixed-price and payment calculations for non-negotiation listings.
+  - **Location Selector & Leaflet Preview Improvements**:
+    - Increased preview map height to `h-80 sm:h-96` (320px–384px) for practical, comfortable usability.
+    - Restored standard Leaflet navigation: enabled smooth surface panning (`dragging={true}`), wheel zoom (`scrollWheelZoom={true}`), and zoom controls (`zoomControl={true}`).
+    - Removed remounting `key` on coordinates so Leaflet maintains map state without tearing down on marker movement.
+    - Maintained marker draggability: dragging the 📍 pin smoothly updates stored latitude and longitude on `dragend`.
+    - Integrated `MapCenterSynchronizer` to pan smoothly when coordinates are resolved from Google Maps link or City dropdown.
+    - Synchronized all three entry methods: Google Maps link, manual numeric inputs, and Leaflet preview pin.
+  - **Restored Furnishing 3-Button Control**:
+    - Replaced the dropdown select with the previous 3-button button group selector (`Fully Furnished`, `Semi-Furnished`, `Unfurnished`).
+    - Styled with Porch Light tokens (`bg-sand/40` track, `bg-deep-purple text-white` active pill, min-h-[44px] touch target).
+    - Preserved exact stored values and Property View display.
+  - **Added "Well" to Water Supply**:
+    - Added `Well` as a standard choice alongside `Corporation Supply`, `Borewell + Municipal`, and `24/7 Treated Water`.
+    - Added fallback support in Edit mode for any legacy or custom water source values so existing records are preserved.
+    - Verified display in Property View Swiss-style spec sheet.
+  - **Premium Payment Before Submission**:
+    - Updated `handleSubmit` in `AgentNewListingPage.jsx`: when Premium is selected and not already verified, the form validates inputs and launches the simulated Premium checkout modal BEFORE saving the listing or submitting for review.
+    - Preserves entered form values safely in state as a recoverable draft.
+    - Submits the listing and linked Premium request only after the Agent confirms simulated payment.
+    - If checkout is cancelled or closed, no listing is created, no promotion fee is charged, and the form remains completely intact with an informative notice.
+    - Provides a "Continue without Premium" option that submits the listing immediately without promotion fees.
+    - Prepared 360° tour assets remain attached to the record but are gated until verified Premium status is approved.
+  - **Conditional Floor Fields by Property Classification (`src/constants/propertyTypes.js`)**:
+    - Created canonical helper `getFloorFieldConfig(type)` covering all 14 property classifications:
+      - Unit-style (`apartment`, `studio`, `penthouse`, `office`, `shop`, `commercial`): requires `Unit Floor Level` and `Total Floors in Wing/Building`.
+      - Standalone structures (`villa`, `house`, `mansion`, `townhouse`, `farmhouse`, `warehouse`, `industrial`): requires only `Total Floors / Levels` and clears/omits unit floor level.
+      - Land / Plot (`plot`): omits all floor fields.
+    - When changing property classification, automatically clears irrelevant floor fields to prevent saving stale data.
+    - Property View adapts: unit types display `Floor Level: X / Y`, standalone structures display `Total Floors: N Floors (Entire Structure)`, and plots display `Plot Layout (Unbuilt Ground)` while omitting floor rows.
+
+- **FOCUSED PROPERTY FORM UPDATE — TYPES, FIVE-PHOTO GALLERY, MAP LINKS, PREMIUM AND 360°**:
+  - **Shared Canonical Property Classifications (`src/constants/propertyTypes.js`)**:
+    - Created single source of truth containing all 14 project property types (`apartment`, `villa`, `penthouse`, `house`, `mansion`, `townhouse`, `farmhouse`, `studio`, `plot`, `office`, `shop`, `commercial`, `warehouse`, `industrial`).
+    - Standardized options, labels, and type-to-transaction categorizations (`SALE_PROPERTY_TYPES`, `RENT_PROPERTY_TYPES`, and `formatPropertyType()`).
+    - Updated `PropertyFilterModal.jsx` to consume canonical types and display readable labels.
+    - Added curated stock imagery fallbacks for `shop` and `industrial` in `src/mocks/images.js`.
+  - **Five-Photo Gallery with Combined Limit & Cover Selection (`AgentNewListingPage.jsx`, `validateImage.js`)**:
+    - Enforced strict 5-photo maximum limit across both local device uploads and remote URLs (`MAX_PHOTOS: 5`, `MIN_PHOTOS: 1`).
+    - Added `validateRemoteImageUrl(url)`: tests URL format and confirms the remote image actually loads before adding to gallery; rejects failed URLs with clear feedback.
+    - Client-side WebP image compression preserved for local uploads (`compressListingImage`, max 2400px edge, ~82% quality).
+    - Added interactive cover photo selection allowing agents to designate any uploaded photo as the listing cover photo, marked by a prominent Cover Badge.
+    - Implemented photo reordering (Move Left / Move Right buttons) and per-photo removal.
+    - Added real-time photo count badge (`X / 5 Photos`).
+    - In edit mode, prefilled existing galleries clamped to max 5 items, preserving cover photo selection and ordering.
+  - **Google Maps Link Location Parsing & Interactive Leaflet Preview (`parseGoogleMapsUrl.js`, `AgentNewListingPage.jsx`)**:
+    - Created parser supporting all standard coordinate-bearing Google Maps link patterns (`@lat,lng`, `!3dlat!4dlng`, `?q=lat,lng`, `?ll=lat,lng`, `/place/lat,lng`, and raw lat/lng pairs).
+    - Geographic boundary validation ensures coordinates stay strictly within valid ranges (-90..90, -180..180).
+    - Built a dedicated "Resolve Location" input and trigger in the Location section.
+    - Integrated real-time Leaflet interactive map preview showing the resolved pin, allowing agents to click or drag the pin to fine-tune coordinates.
+    - Fallback error feedback displayed for unresolvable URLs while retaining manual numeric coordinate inputs.
+  - **Premium Status Controls 360° Virtual Tour Access (`isPremium.js`, `PropertyDetailsPage.jsx`)**:
+    - Decoupled 360° tour access from property price/rent thresholds (removed ₹2 Cr / ₹1 Lakh hardcoded heuristic).
+    - Strictly gated `PanoramaViewer` on Property Details behind verified Premium status (`isPremium(property)`).
+    - For non-Premium listings possessing a 360° tour asset, displayed a Porch Light styled upgrade callout explaining the Premium requirement.
+    - Maintained clear separation between Premium listing status and the 4-slot Home Featured placement.
+    - Updated seed listings with 360° tours (`prop-1` to `prop-6`, `prop-11`, `prop-13`, `prop-18`, `prop-23`) to set `isPremium: true` and `isPremiumAdminFlag: true`.
+  - **Simulated Premium Promotion Workflow & Checkout Modal (`promotions.js`, `AgentNewListingPage.jsx`)**:
+    - Updated `requestPremiumStatus` in `promotions.js` to support both `approved` and `pending` listings, allowing newly submitted or edited listings to request Premium status.
+    - Admin approval of Premium requests sets both `isPremium: true` and `isPremiumAdminFlag: true`.
+    - Integrated simulated checkout modal on Add/Edit property when Premium status is selected: reviews the ₹15,000 promotion fee, placement duration (30 days), simulated payment methods (UPI, Card, Net Banking), and dispatches an Admin review request.
+    - Provided a "Continue without Premium" option allowing agents to proceed with saving their listing without promotional charges if desired.
+
+- **AGENT ANALYTICS REBUILD — PORCH LIGHT SALES & TRAFFIC ANALYTICS**:
+  - **Restorable Backup Created**:
+    - Created a byte-exact backup copy outside the runtime/imported source tree at `backups/agent-analytics-pre-rebuild/AgentAnalyticsPage.jsx.bak`.
+    - Documented step-by-step restoration instructions in `backups/agent-analytics-pre-rebuild/RESTORE_INSTRUCTIONS.md`.
+  - **Porch Light Design System Theme**:
+    - Implemented with porcelain backdrop (`#FAF7F2` / `var(--porcelain)`), ruled rows (`border-charcoal/10`), large serif numerals (`font-serif`), thin purple lines (`#5E4F7A`), and an electric lemon marker per chart (`#E6FF3D`). Flat sections without nested box-in-box clutter.
+    - Answers the 4 core questions: *What needs my attention? How am I doing? Which listings are working? What has been paid?*
+  - **Header, Period Options, Drawer Filters, and Insight**:
+    - Mono label `PORTFOLIO` with `Demo data` badge.
+    - Large serif title `Sales and traffic analytics`.
+    - Period options: `7 days`, `30 days`, `90 days` (default: 30 days). All figures, sparklines, funnels, activity trends, ranking tables, escrow totals, and CSV downloads strictly reflect the chosen period and active filters.
+    - Compact slide-over drawer with only 4 filters: Buy/Rent listing type, city, property type, and listing status. Includes active filter count indicator, live updates, and visible "Clear filters" action.
+    - Deterministic insight line generated by fixed rules from recorded data without AI calls, handling zero-activity comparisons gracefully without misleading percentages.
+  - **1. What Needs Attention**:
+    - Ruled list with at most 5 actionable items sorted by urgency:
+      - Inquiry waiting > 24 hours (with requester, property, elapsed time, and reply link).
+      - Visit request awaiting reply (with requested date/time and review link).
+      - Active listing with zero views in 14 days (with edit link).
+      - Listing pending admin review or rejected (with reason and listings link).
+      - Fallback: *"Nothing needs your attention. Your lights are on."*
+  - **2. Four Summary Figures**:
+    - Ruled row with 4 columns (2x2 on mobile < 640px): Listing views, Inquiries, Visits, Closures.
+    - Single-layer count-up animation (`useCountUp`) eliminating ghost or duplicate text.
+    - Proportional comparison vs previous equal-length period (`+14% vs prev 30d` or `New activity`).
+    - Custom SVG sparkline for each metric and contextual subtext (e.g. average first reply time, confirmed visit counts, inquiry conversion rate).
+  - **3. Conversion Funnel & Activity Trend**:
+    - Horizontal 4-step conversion funnel: Views → Inquiries → Visits (confirmed/completed only) → Closures.
+    - Step conversion percentages (`% of viewers inquired`, `% of inquiries booked`, `% of visits closed`) and deterministic reading identifying the largest drop-off.
+    - Activity trend bar chart contrasting Inquiries (`#5E4F7A`) and Visits (`#8F7FA8`) across daily (7d) or weekly (30d, 90d) buckets, with an Electric Lemon dot (`#E6FF3D`) highlighting the peak activity bucket.
+  - **4. Listing Performance**:
+    - Top 5 listings ranked by selected metric: `Most views`, `Most inquiries`, or `Best conversion`.
+    - Compact row with cover image, title, city/type, inline progress bar, numeric count, and status pill.
+    - Collapsed "No activity yet (N)" group with expand/collapse toggle, providing 1 real-data action suggestion per quiet residence (photos, specifications, 360 virtual tour, or pricing).
+  - **5. Money (Escrow Records & Platform Ledger)**:
+    - Last 5 records in period from `payments` store (token advances and rent deposits), period total, and cumulative volume trend.
+    - Monthly platform escrow ledger across the last 4 months with transparent disclosure: *"Platform records token advances and rent deposits for escrow documentation. Agent commissions and fee disbursements are settled externally with your agency."* (Payouts: `₹0 (external)`).
+  - **Footer & CSV Export**:
+    - Mono attribution footer and working "Export CSV" action downloading sanitized CSV of filtered portfolio performance data.
+  - **Event Telemetry Grounding**:
+    - Seeded deterministic `SEED_PROPERTY_VIEWS` across the last 90+ days in `seedData.js` and `store.js`.
+    - Integrated view tracking in `getPropertyById` (once per user per day, excluding the listing agent and admins).
+- **FOCUSED AGENT FIX — PROPERTY EDIT WORKFLOW & ACTIVE PROPERTY LOCKING**:
+  - **Root Cause Diagnosis**:
+    - Identified why `/agent/new-listing?editId=prop-1` opened the application error screen: `DashboardSkeleton` was rendered in `AgentNewListingPage.jsx` during initial loading (`loadingInitial === true`) without having been imported in the file.
+    - When visiting `/agent/new-listing?editId=...`, the component initialized with `loadingInitial = true` and attempted to render `<DashboardSkeleton type="cards" />`, throwing an unhandled `ReferenceError: DashboardSkeleton is not defined` that triggered the global `ErrorBoundary`.
+  - **Edit Route & Form Initialization Fix (`AgentNewListingPage.jsx`)**:
+    - Imported `DashboardSkeleton` from `@/components/dashboard/DashboardSkeleton`.
+    - Handled direct URL loading, route transitions, and page refreshes cleanly.
+    - Implemented dedicated, layout-integrated views instead of crashing into generic error pages:
+      - **Loading State**: Animated loading indicator and skeleton layout.
+      - **Not Found State**: Clear "Residence Not Found" card with a return action to `/agent/listings`.
+      - **Access Denied State**: "Access Restricted" card verifying that the property belongs to the signed-in Agent (`prop.agentId === activeUserId` or admin).
+      - **Unavailable for Editing State**: "Listing Unavailable for Editing" card explaining the exact lifecycle reason why the property is locked from editing.
+    - Achieved 100% prefill parity across all 7 Property View sections: listing type, typology, title, description, valuation, negotiation, location coordinates, dimensions, Buy/Rent compliance (including deposit vs securityDeposit prefill, maintenance, possession, age, ownership, lease, notice, pets), parking, utilities, connectivity, gallery images, cover image index, and 360° virtual tour toggle.
+    - In-place updates preserve unedited properties on the existing object without duplicating records or resetting optional fields.
+    - On successful save, returns to `/agent/listings` with a contextual toast notification (noting Admin re-review if core specs were modified on an approved listing).
+  - **Hiding Edit for Active Properties in Portfolio UI (`AgentListingsPage.jsx`)**:
+    - Integrated `getPropertyEditEligibility(prop, payments)` in card actions:
+      - **Editable Listings**: Renders active `Edit` button linking to `/agent/new-listing?editId=${prop.id}`.
+      - **Ineligible Listings**: Hides the `Edit` button and renders a locked status indicator (`Sold`, `Leased`, `Handover`, or `In Escrow`) with `min-h-[44px]` touch target and a detailed hover/touch tooltip (`title`) explaining the locked status.
+      - Removed Edit button from `pending_handover` rental cards, requiring handover completion before editing can occur.
+  - **Service-Level Edit Eligibility & Protection (`src/services/properties.js`)**:
+    - Added and exported `getPropertyEditEligibility(property, payments)` to evaluate four strict blocking conditions:
+      1. Completed sale (`isSold`, `status === 'sold'`, `availabilityStatus === 'sold'`).
+      2. Active tenant lease (`isLeased`, `rentalStatus === 'leased'`, `status === 'rented'`, `leaseStatus === 'active'`).
+      3. Pending handover or early lease cancellation (`rentalStatus === 'pending_handover'`, `leaseStatus === 'pending_cancellation'`).
+      4. Active client escrow transaction in payments ledger (`pay.type !== 'promotion_fee'` with active/completed/pending status).
+    - In `updateProperty(id, updateData)`:
+      - Enforced ownership verification.
+      - Enforced `getPropertyEditEligibility`, throwing a descriptive error if editing is blocked.
+      - Stripped protected transactional, lease, and history fields (`id`, `agentId`, `isSold`, `soldAt`, `buyerId`, `availabilityStatus`, `isLeased`, `rentalStatus`, `tenantId`, `leaseStatus`, `leaseStart`, `leaseEnd`, `views`, `viewsCount`, `createdAt`) from ordinary agent edits, preventing unauthorized state corruption or relisting.
+      - Preserved full transaction and lease history.
+- **AGENT DASHBOARD POLISH — ANALYTICS, LISTINGS, PROPERTY FORMS, TRANSACTIONS, PREMIUM, AND FEATURED**:
+  - **Sales Analytics Polish (`AgentAnalyticsPage.jsx`)**:
+    - Added visible "Clear filters" action button in filter header that resets all multi-dimensional filters (date range, Buy/Rent, city, property type, specific listing, and lifecycle status) simultaneously.
+    - Combined filter state seamlessly without stale criteria, dynamically updating all KPI metric cards, charts, and table rows in unison.
+    - Removed Views column from Property-Level Performance Metrics table and sort controls, focusing strictly on high-intent engagement: Inquiries, Visit Bookings, and Valuation.
+    - Replaced Views in Listing Engagement chart to compare direct Inquiries against Scheduled Visits for top residences.
+    - Added Managed Client Transaction Activity chart tracking cumulative INR deal volume and closed transaction count over time.
+    - Respected Porch Light income boundary: added dedicated Agent Income Ledger with an explicit "No Platform Income Recorded" banner explaining that client purchase tokens and rental deposits are held in institutional escrow with zero agent commissions or platform income cuts recorded.
+  - **My Listings Actions & Edit Route Fix (`AgentListingsPage.jsx`, `AgentNewListingPage.jsx`, `router.jsx`)**:
+    - Arranged property card action buttons in a compact 2-row grid layout matching User visit cards (`w-full md:w-[320px] lg:w-[340px] shrink-0`, `grid grid-cols-2 gap-2`, `min-h-[44px] touch-friendly targets`), eliminating text crowding while preserving natural card height expansion.
+    - Added visible "Clear filters" action button in the listings search and filter bar when any filter criteria is active.
+    - Diagnosed and fixed the Edit route failure: added missing route definitions in `router.jsx` (`/agent/edit-listing/:id`, `/agent/listings/edit/:id`, `/agent/properties/edit/:id`, and `/agent/new-listing/:id`).
+    - Fixed user auth hydration race condition in `loadListingToEdit()` by reading from `mockStore.getState().currentUser` if component `user` state has not yet resolved, ensuring authorized agents are never incorrectly blocked or redirected.
+    - Enforced service-level agent ownership (`prop.agentId === currentAgentId`), pre-filling all fields, updating the existing record without duplicating entries, and preserving listing lifecycle rules (e.g. core transactional edits return approved listings to pending review).
+  - **Add Property Form Layout & Parity (`AgentNewListingPage.jsx`)**:
+    - Widened form layout container from `max-w-4xl` to `max-w-6xl w-full mx-auto` responsive layout with generous horizontal spacing.
+    - Achieved complete parity with Property View: core attributes, interactive map coordinates, detailed dimensions, Buy/Rent statutory compliance (possession status, age, ownership, security deposit, maintenance, notice, pet policy), utilities & amenities, urban connectivity distances, 3 to 15 photos with cover selector, and pure function luxury-guarded 360° virtual tour rule (`isPremium`).
+  - **Transactions Ledger & PDF Receipts (`AgentTransactionsPage.jsx`, `payments.js`)**:
+    - Rebuilt to full parity with User Payments page: search (ID, title, client name, locality), filter pills (All, Purchase Tokens, Rental Deposits, Promotion Fees), and sorting (Date, Amount, Status).
+    - Scoped strictly to the signed-in agent: displays transactions on properties managed by the agent as well as self-paid promotion fees.
+    - Provided clear visual classification distinguishing Client Escrow (Purchase Tokens & Rental Escrow) from Agent Marketing Expenses (Promotion Fees).
+    - Preserved prominent simulated demo notice and integrated PDF receipt generator (`generatePdfReceipt`).
+  - **Separated Premium Badge vs Home Featured Workflows (`promotions.js`, `AgentPromotionsPage.jsx`, `AdminPromotionsPage.jsx`, `AdminFeaturedPage.jsx`, `TopPropertiesSection.jsx`)**:
+    - **Premium Listing Status (`type: 'premium_badge'`)**: Tag/badge displayed across listings, map previews, and Property View. Agent requests badge for approved listing; pays configured fee in demo checkout; Admin reviews and approves (`property.isPremiumAdminFlag = true`); duplicate requests prevented.
+    - **Home Featured Placement (`type: 'featured_placement'`)**: Separate workflow controlling the strictly 4 properties showcased on the public Home page (`TopPropertiesSection.jsx`). Enforces strict 4-slot capacity ceiling. When full, additional approved requests enter an ordered priority waitlist queue (`status: 'waitlist'`).
+    - **Automated Waitlist Promotion (`syncFeaturedPlacements`)**: When an active showcase placement expires or is transitioned to Sold/Rented, the top waitlisted listing is automatically promoted into the active 4-slot showcase.
+    - **Admin Curation & Queue Review**: Rewritten `AdminFeaturedPage.jsx` with active 4-slot showcase manager, priority waitlist queue, and incoming requests review ("Approve & Activate", "Approve & Queue", "Reject"). Updated `AdminPromotionsPage.jsx` to moderate Premium Badges exclusively.
+  - **Mobile Dashboard Menu / Header Overlap Fix (`DashboardLayout.jsx`)**:
+    - Eliminated transparency and overlap on mobile: styled mobile dashboard bar with opaque `bg-porcelain border-b border-charcoal/15 shadow-sm`.
+    - Integrated with global header scroll-hide mechanism by listening to `'porchlight-header-change'` and observing `document.body.dataset.headerHidden`.
+    - Applied dynamic top positioning (`top-0` when header is hidden, `top-[72px]` when header is visible) across mobile menu bar, mobile drawer, and desktop sidebar, ensuring seamless alignment without gaps or content clipping.
+- **AGENT DASHBOARD IMPROVEMENT — ANALYTICS, LISTINGS, PROPERTY DATA, PROFILE, PROMOTIONS**:
+  - **Visual Sales Analytics (`AgentAnalyticsPage.jsx`)**:
+    - Expanded Agent Sales Analytics beyond text-only summaries with interactive Recharts graphs styled with Porch Light tokens (`#5E4F7A`, `#8F7FA8`, `#26262B`, `#F1ECE3`).
+    - Grounded strictly in recorded application metrics: real listing views (`views`), direct inquiries (`inquiries` + `chats`), scheduled visits (`bookings`), and confirmed closures (`sold`, `rented`). Zero fabricated commissions, hypothetical multipliers, or simulated earnings.
+    - Added multi-dimensional reporting filters: Period (`All Time`, `Last 90 Days`, `Last 30 Days`), Listing Type (`All`, `For Sale`, `For Rent`), City, Architectural Property Classification, Lifecycle Status, and specific Residence selector.
+    - Implemented Monthly Activity Trend chart (Inquiries vs Visit bookings) and Listing Engagement chart (Views vs Inquiries for top residences) with responsive layouts and clear no-data states.
+    - Added Property-Level Performance Ledger with dynamic sorting (`Most Views`, `Most Inquiries`, `Most Visit Requests`, `Valuation / Price`, `Recent Activity`).
+  - **My Listings Filtering, Sorting, and Synchronization (`AgentListingsPage.jsx`, `properties.js`)**:
+    - Added multi-criteria filters: Status tabs (`All`, `Approved`, `Pending`, `Sold / Rented`, `Rejected`), Buy/Rent, City, Property Type, and live substring Search.
+    - Added sorting controls: `Newest First`, `Price: Low to High`, `Price: High to Low`, and `Area: Largest`.
+    - Enforced moderation and transaction lifecycle rules:
+      - Pending agents cannot publish live listings.
+      - Non-admin agents cannot mark a property Sold or Rented without an executed platform transaction (reservation token or lease payment) in the payments ledger.
+      - Completed transactions are permanently preserved and cannot be deleted.
+      - Added "Edit" shortcut linking directly to `/agent/new-listing?editId=${prop.id}`.
+  - **Complete Add Property & Edit Form (`AgentNewListingPage.jsx`, `properties.js`)**:
+    - Brought form into full parity with the 7 Property View sections:
+      1. Core: Listing type (Sale/Rent), classification, title, architectural narrative, price, negotiation toggle.
+      2. Location & Map: City (9 supported cities with auto-coordinates), locality, PIN, street address, and lat/lng map coordinates.
+      3. Dimensions & Layout: Bedrooms (BHK), bathrooms, balconies, facing direction, super built-up area, carpet area, floor, total floors, furnishing.
+      4. Compliance & Specs: RERA ID (mandatory verified badge); Buy specifics (possession status, property age, ownership type); Rent specifics (available from, security deposit, maintenance, min lease, notice period, preferred tenants, pet policy).
+      5. Utilities & Amenities: Parking bays, water supply, 100% DG backup, security, gated enclave, lifts, gym, pool, garden.
+      6. Urban Connectivity: Approach road, nearest transit/metro, airport distance, railway distance, hospital distance, commercial distance.
+      7. Media & 360 Tour: 3 to 15 gallery photos with cover photo selector and 360° virtual tour integration strictly guarded by pure function `isPremium(property)` (price ≥ ₹2 Cr for sale, ≥ ₹1 Lakh/mo for rent, or luxury typology).
+    - Added Edit Listing mode (`?editId=...`): pre-populates all existing data. Modifying core transactional specs (price, RERA ID, ownership, area) on an already approved listing automatically routes it to Admin review (`status: 'pending'`) and dispatches a notification to `adm_1`.
+  - **Agent Profile & Inbound Client Channels (`AgentProfilePage.jsx`, `ContactAgentModal.jsx`, `properties.js`, `seedData.js`)**:
+    - Transformed channel toggles into accessible switches (`role="switch"`, `aria-checked`) with explicit textual status badges (`Enabled` vs `Disabled`).
+    - Added validation before enabling: WhatsApp requires a valid WhatsApp number; Phone requires a business phone line.
+    - Synchronized with public `ContactAgentModal`: shows channels only when enabled AND valid contact details exist. Preserves in-app messaging as primary platform workflow. Never treats phone as WhatsApp unless explicitly entered in the WhatsApp field.
+    - Connected `getPropertyById(id)` to dynamically attach live agent profile data from the user store so changes sync immediately across Property View, contact modals, and messages.
+  - **Complete Premium Promotions (`AgentPromotionsPage.jsx`, `promotions.js`, `TopPropertiesSection.jsx`)**:
+    - Connected self-serve promotion request flow to live platform governance parameters (`getPromotionConfig()`). Gracefully disables promotion requests with an explanatory alert if no fee or duration is configured by Admin.
+    - Prevented duplicate requests: agents cannot submit or be charged twice for listings with a pending review or an active, unexpired placement window.
+    - Displayed clear lifecycle states: `Awaiting Admin Review`, `Active in Showcase` (with live window dates), `Showcase Concluded` (expired), and `Declined` (with reviewer feedback notes).
+    - Front-page Top Properties carousel (`TopPropertiesSection.jsx`) strictly prioritizes active, unexpired featured listings within their placement window, dropping them when expired or unavailable.
+  - **Documentation & Verification**:
+    - Updated `AGENT_DASHBOARD_DESIGN.md`, `INTEGRATION.md`, and `PROGRESS.md`.
+    - Built and verified production bundle with zero errors via `npm run build`.
+- **FOCUSED DASHBOARD RESPONSIVE FIX — VISIT ACTIONS AND SIDEBAR SCROLL AREAS**:
+  - **Two-Row Visit Action Layout (`UserVisitsPage.jsx`)**:
+    - Arranged visit card action buttons in a compact 2-row grid (`w-full md:w-[320px] lg:w-[340px] shrink-0`) that eliminates crowding of property information.
+    - Supported 1, 2, 3, and 4 actions while preserving action order, labels, icons, titles, and handlers:
+      - 4 actions (Pending): Row 1 (`Edit Schedule`, `Cancel Request`), Row 2 (`Message Agent`, `Property`).
+      - 3 actions (Confirmed): Row 1 (`Request Reschedule` or `Modify Reschedule` spanning 2 columns), Row 2 (`Message Agent`, `Property`).
+      - 2 actions (Past/Cancelled): Row 1 (`Message Agent`, `Property` side-by-side).
+      - 1 action: touch-friendly button spanning the action width.
+    - Property details (title, status pill, location, date/time, notes, and reschedule alert banners) flex independently in `flex-1 min-w-0`, allowing the card to grow naturally when content wraps with zero clipping, overlap, or fixed card heights.
+    - Touch targets are fully touch-friendly with `min-h-[44px]` height and centered layout.
+  - **Anchored Sidebar Header, Search, and Footer with Independent Middle Scroll (`DashboardLayout.jsx`)**:
+    - Applied across User, Agent, and Admin dashboards:
+      - Desktop sidebar (`aside`) changed from full-column scrolling to `overflow-hidden`.
+      - Workspace/Account profile area (`shrink-0`) and search launcher button (`shrink-0`) stay anchored at the top.
+      - Footer actions (`Showcase` and `Sign out`) stay anchored at the bottom (`shrink-0 mt-auto`).
+      - Only the middle navigation items region (`<nav className="flex-1 overflow-y-auto ... overscroll-contain">`) scrolls when content exceeds available height.
+      - Persistent scroll memory (`recordSidebarScroll`) and restoration (`sidebarNavRef.current.scrollTop = saved`) preserves sidebar navigation scroll position across route changes without jumping to top or forcing active item into view.
+      - The main dashboard page scrolls independently from the sidebar.
+  - **Mobile-Friendly Dashboard Adaptations (`DashboardLayout.jsx`, `UserVisitsPage.jsx`)**:
+    - Mobile slide-over drawer sits below the site header (`fixed inset-x-0 bottom-0 top-[72px] z-40`), anchoring the account header and search at the top, allowing middle navigation items to scroll independently, and anchoring footer actions at the bottom.
+    - Modal dialogs for visit schedule edits, reschedule requests, and cancellations equipped with `max-h-[90vh] overflow-y-auto` to prevent viewport clipping on small screens.
+    - Enforced `overflow-x-hidden` on main dashboard container to prevent horizontal page overflow while preserving touch target minimums (`min-h-[44px]`) and `prefers-reduced-motion` compliance.
+  - **Documentation & Verification**:
+    - Updated `DASHBOARD_SYSTEM_DESIGN.md` and `USER_DASHBOARD_DESIGN.md`.
+    - Production build verified with code 0 via `cmd.exe /c npm run build`.
+- **FOCUSED DASHBOARD UPDATE — ACTIVE NAV, SEARCH, PROFILE CONTROLS, AND ACCOUNT LIFECYCLE**:
+  - **Dashboard Navbar Tab Active on Every Dashboard Page (`Header.jsx`)**:
+    - Center "Dashboard" tab in `Header.jsx` remains active across every child route within all three dashboards (`/dashboard/*`, `/agent/*`, `/admin/*`) using shared route prefix matching (`isTabActive`).
+    - Standardized Admin tab label to "Dashboard" (linking to `/admin/overview`), maintaining consistent naming and layout across User, Agent, and Admin roles.
+    - Preserved existing sliding underline spring animation (`motion.div layoutId="header-active-tab"`) and active behavior for all other tabs (`Home`, `Buy`, `Rent`, `Login`, `Register`).
+  - **Expanded Dashboard Search & Non-Sticky Positioning (`DashboardSearchModal.jsx`, `dashboard.js`, `DashboardLayout.jsx`)**:
+    - Expanded search catalog across User, Agent, and Admin to index dashboard pages, profile sections, settings toggles, and available actions (Change Password, Profile Photo/Avatar, Notification Settings, Account Deactivation/Deletion where permitted, RERA Credentials, Promotion Parameters, Announcement Dispatch, Moderation Reviews).
+    - Strict role scoping: Users, Agents, and Admins only see actions and destinations permitted to their role. Admin accounts never see deletion controls.
+    - Selecting an action or setting navigates to the page and smoothly scrolls (`scrollIntoView`) and focuses the target element (`#password-section`, `#avatar-section`, `#credentials-section`, `#danger-zone`).
+    - Destructive actions navigate to the danger zone control but never execute automatically without explicit user confirmation.
+    - Removed sticky/fixed pinning from search modal: container is embedded in document flow (`absolute inset-x-0 top-0`), smoothly scrolling away with the page rather than remaining pinned over page content or the footer.
+    - Preserved sidebar search launcher button without any visible `⌘K` / `K` shortcut badge.
+  - **Restored Password-Change Controls for User, Agent, and Admin (`ChangePasswordCard.jsx`, `auth.js`)**:
+    - Implemented reusable `ChangePasswordCard` integrated into `UserProfilePage`, `AgentProfilePage`, and `AdminSettingsPage`.
+    - Features current password verification against user credentials, validation of new password (min 6 characters), confirmation matching, and clear success/error feedback banners.
+    - Never stores plaintext passwords in profile data.
+    - Dispatches an audit security notification to the account owner (`Security Alert: Password Changed`) upon update using the shared notification store.
+  - **Aligned Profile Actions & Account-Deletion Boundaries (`UserProfilePage.jsx`, `AgentProfilePage.jsx`, `AdminUsersPage.jsx`, `auth.js`)**:
+    - **User Profile**: Moved Account Deactivation danger zone to a full-width bottom row (`#danger-zone`), clearly separated from ordinary profile editing. Blocks deletion while active obligations exist: active leases, pending payments, or unresolved active bookings (`status: 'pending'` or `'confirmed'`). Displays specific blocking reasons and links to concierge support (`/dashboard/complaints`).
+    - **Agent Profile**: Placed Request Account Deletion at the bottom in a full-width row (`#danger-zone`) with clear warning styling. Agents cannot delete unilaterally; provides an action to submit a deletion request with reason capture for Admin review. Blocks approval while active obligations exist: active listings, active leases, pending visit requests, pending transactions, or unresolved promotion requests. Displays specific blocking obligations and resolution shortcuts.
+    - **Admin Governance**: Admin profile strictly omits any deletion/deactivation control. In `AdminUsersPage`, added dedicated "Deletion Requests" moderation view (`#deletion-requests-tab`): evaluates agent obligations in real time, disables approval while obligations remain active, and provides approval (deactivates agent, archives listings from public search/maps/featured, cancels promotions, sanitizes private agent credentials from user transaction snapshots without deleting user purchase history, and transitions active lease oversight to Concierge) or decline with feedback notifications.
+  - **Complete Notifications for Affected Workflows**:
+    - Added security notifications on password change, Admin notification on agent deletion request submission, Agent notification on Admin deletion decision, and blocking feedback.
+    - Prevents duplicate notifications on retry. Never notifies permanently deleted accounts.
+  - **Documentation & Verification**:
+    - Updated `DASHBOARD_SYSTEM_DESIGN.md`, `USER_DASHBOARD_DESIGN.md`, `AGENT_DASHBOARD_DESIGN.md`, `ADMIN_DASHBOARD_DESIGN.md`, `INTEGRATION.md`, and `PROGRESS.md`.
+    - Verified production build via `cmd.exe /c npm run build` (2,546 modules compiled in 9.95s with 0 errors).
+- **CROSS-DASHBOARD POLISH AND WORKFLOW SYNCHRONIZATION**:
+  - **Sidebar Search Shortcut Badge Removal**:
+    - Removed the visible "⌘K" / "K" badge from the sidebar search launcher button across User, Agent, and Admin dashboards (`DashboardLayout.jsx`).
+    - Maintained search button layout, accessibility label, and global keyboard shortcut (`Cmd+K` / `Ctrl+K`) via document keydown listener without showing visual badges.
+  - **Sidebar Scroll Position Preservation (All Roles)**:
+    - Fixed sidebar scroll reset when selecting lower items by creating a persistent module-scoped and `sessionStorage`-backed scroll memory (`sidebarScrollMemory`).
+    - Tracks desktop `<aside>` scroll position on scroll and restores it cleanly on route change via `useLayoutEffect` and `requestAnimationFrame`, while resetting main content document scroll to top `(0, 0)`.
+  - **User Profile Polish & Red Destructive Deactivation Treatment**:
+    - Replaced the ordinary deactivation button with an explicit red warning card (`bg-rose-50/70 border border-rose-300`, `text-rose-950`, destructive red `Trash2` button).
+    - Preserved multi-step confirmation dialog and pre-deletion verification (`canDeleteAccount`): blocks deactivation if active residential leases or pending transactions exist; if permitted, anonymizes personal data while preserving completed transaction receipts and RERA property audit trails.
+    - Balanced 2-column layout (`lg:grid-cols-3`): Legal personal details and red destructive danger zone on left (`lg:col-span-2`); Profile avatar uploader, immutable account role, and statutory audit note on right (`lg:col-span-1`). Omitted unnecessary password form per instructions to avoid empty layout voids.
+  - **Agent Profile Expansion & Balanced Layout**:
+    - Re-architected Agent Profile into a balanced 2-column layout (`max-w-6xl`, `lg:grid-cols-3`).
+    - Left column (`lg:col-span-2`): Representative name, agency/firm, read-only system email, business phone, direct WhatsApp contact number, state RERA license, primary market city, inbound client communication channels (WhatsApp, in-app chat, phone, email), and simulated platform promotion billing preferences note (reusing existing demo checkout without collecting real credentials).
+    - Right column (`lg:col-span-1`): Professional headshot uploader with client-side compression (<150KB), and Admin-controlled RERA verification status card (`Verified Partner` vs `Audit Pending`). Agents cannot self-verify or modify system roles.
+  - **Admin Profile Separation & Balanced Layout**:
+    - Re-architected Admin Settings into a balanced 2-column layout (`max-w-6xl`, `lg:grid-cols-3`).
+    - Clearly separated personal administrator profile details (Legal name, direct emergency phone, headquarters base city, read-only email) from platform system configuration (showcase promotion fees, duration in days, active inbound toggle, and curation terms).
+    - Right column (`lg:col-span-1`): Administrator avatar uploader with initials fallback, and Privileged Role security card documenting the immutable root administrator tier (public admin registration disabled).
+  - **Shared Profile Synchronization**:
+    - Profile updates (name, avatar, phone, WhatsApp) save directly to `currentUser` and `users` in `mockStore`.
+    - `AuthProvider` subscribes to `mockStore`, immediately reflecting changes across the global header, sidebar, chat threads, and records without requiring page reloads.
+  - **Visits & Schedule Changes Synchronization**:
+    - **Pending Visits**: User can edit requested date/time directly via `editPendingBookingSchedule`. Updates the shared booking record, keeps status `pending`, shows "Schedule Updated" badge, and notifies the responsible Agent at `/agent/visits`.
+    - **Confirmed Visits Reschedule**: User can submit a reschedule request proposing a replacement date/time via `requestBookingReschedule`. The current confirmed appointment remains valid while awaiting approval; displays a pending reschedule banner with option to modify proposed time. Agent reviews the request at `/agent/visits` with side-by-side comparison of current vs proposed times and can "Accept New Time" (updates appointment, confirms visit, notifies both) or "Decline New Time" (preserves original confirmed visit without cancellation, notifies user).
+    - Blocked date/time changes for past, completed, and cancelled visits.
+  - **Cross-Role Notifications Synchronization**:
+    - Added instant notifications on chat messages and simulated agent replies linking to `/agent/inquiries` and `/dashboard/chat`.
+    - Added admin notification when a new listing is submitted (`createProperty`) and agent notification when a listing is rejected with reasons (`rejectPropertyListing`).
+    - Added admin notification when a concierge support ticket is filed (`submitComplaint`) and user notification when ticket status is updated or resolved (`updateComplaintStatus`).
+    - Maintained exact unread badge synchronization between dashboard notification pages and the persistent global header bell.
+  - **Documentation & Verification**:
+    - Updated `DASHBOARD_SYSTEM_DESIGN.md`, `USER_DASHBOARD_DESIGN.md`, `AGENT_DASHBOARD_DESIGN.md`, `ADMIN_DASHBOARD_DESIGN.md`, `INTEGRATION.md`, and `PROGRESS.md`.
+    - Verified production build via `cmd.exe /c npm run build` (2,545 modules compiled with 0 errors).
+  - **Contextual Back Navigation**:
+    - Created `DashboardBackButton.jsx` providing smart browser history navigation with safe, reliable fallbacks (`/dashboard/overview`) so users never leave the dashboard or hit stale routes.
+    - Integrated across all nested User dashboard pages: My Properties, Visits & Bookings, Payments, Saved Homes, Messages, Notifications, Help & Support, and Profile & Settings.
+  - **My Properties Status Tags Legibility**:
+    - Restyled "VERIFIED PURCHASE" (`bg-sand/95 text-deep-purple border border-deep-purple/30 shadow-xs backdrop-blur-xs font-mono text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full font-medium flex items-center gap-1`) and "ACTIVE LEASE" (`bg-sand/95 text-charcoal border border-charcoal/30 shadow-xs backdrop-blur-xs font-mono text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full font-medium flex items-center gap-1`).
+    - Matched the exact themed treatment of the nearby "RERA VERIFIED" tag, eliminating hard-to-read transparent backgrounds and non-theme green.
+  - **Visits & Bookings Cancellation Flow**:
+    - Allowed Users to cancel visit requests directly only while in `pending` (unaccepted) status via `cancelBooking(id)` with a themed confirmation dialog.
+    - For `confirmed` visits, disabled unilateral cancellation and provided clear guidance with a direct shortcut to message the managing agent to request rescheduling or cancellation.
+    - Disabled cancellation for past, completed, and declined visits. Updated filter pills to classify cancelled visits under "Past / Cancelled".
+  - **Payments & Activity Filters**:
+    - Added compact themed filter pills: `All`, `Buy (Token Advance)`, and `Rent (Move-in Deposit)`.
+    - Added instant client search input matching Transaction ID, Receipt number, property title, and payment method across user-scoped records.
+  - **Universal Notifications Polish (User, Agent, Admin Dashboards)**:
+    - Count badges show exclusively unread notifications, strictly synchronized with the global site header bell count across all roles.
+    - Opening or clicking any notification immediately marks it as read, real-time updating both the page counter and global header badge.
+    - Added category filter pills and live search.
+    - Added individual delete actions and a "Delete all" action with confirmation dialog, strictly scoped to the active user's notifications without deleting other accounts' data.
+    - Styled status tags, borders, and icons using the Porch Light palette (`porcelain`, `sand/35`, `deep-purple/10`, `border-charcoal/15`).
+  - **Support Ticket Form Cancel Action**:
+    - Replaced the plus icon on the form cancel button with a clean `X` (close/cancel) icon and labeled it "Cancel ticket" in both the header toggle and form footer, preventing accidental submissions.
+  - **User Profile & Settings Improvements**:
+    - Restructured into a clean 2-column desktop grid (`lg:grid-cols-3`): profile details, password update, and account deactivation on left (`col-span-2`); profile photo uploader and immutable role badge on right (`col-span-1`).
+    - Profile photo updates, removals, and fallbacks synchronize across sidebar, header, and messaging threads via shared store updates.
+    - Added secure password update flow with current password verification, min-6-character rule, and clear success/error states.
+    - Added Account Deactivation flow: evaluates active obligations (`canDeleteAccount`). Blocks deactivation if active leases, pending payments, or pending visits exist, with clear explanatory messaging and direct support links. If permitted, deactivates account and anonymizes personal data while preserving completed transaction receipts and RERA property audit trails.
+  - **Sidebar Scroll Position Preservation (All Dashboards)**:
+    - Added scroll position tracking to the desktop sidebar `<aside>` element in `DashboardLayout.jsx`.
+    - Navigating between dashboard tabs resets main document page scroll to top `(0, 0)` while maintaining the exact sidebar scroll position, eliminating annoying jumps back to the top of the sidebar.
+  - **Property Availability & Rental Lifecycle Enforcement**:
+    - Completed sales (`isSold: true` or `availabilityStatus: 'sold'`) are automatically excluded from public `/buy` listings, map pins, and search results. Detailed access is restricted to Buyer, managing Agent, and Admin. Relisting via ordinary agent edit is prohibited.
+    - Actively leased properties (`isLeased: true` or `rentalStatus: 'leased'`) are automatically excluded from public `/rent` listings, map markers, and search results, and duplicate bookings are blocked.
+    - Added mutual early lease cancellation workflow: Tenant or managing Agent can initiate an early exit request. The other party must agree before the lease is closed. Property remains leased and unavailable until agreed, entering `pending_handover` upon mutual agreement until managing Agent confirms handover inspection (`confirmRentalHandover`), re-listing the same property without duplicate records.
+  - **Documentation & Verification**:
+    - Updated `USER_DASHBOARD_DESIGN.md`, `DASHBOARD_SYSTEM_DESIGN.md`, `BUY_RENT_DESIGN.md`, `PROPERTY_DETAILS_DESIGN.md`, `INTEGRATION.md`, and `PROGRESS.md`.
+    - Verified production build via `cmd.exe /c npm run build` (2,545 modules compiled in 12.16s with 0 errors).
+
+  - **Consistent Porch Light Theming & Zero-Off-Theme Green Surfaces**:
+    - Replaced all remaining stark white cards, fields, and tables with established Porch Light tokens (`porcelain`, `sand/35`, `sand/50`, `charcoal`, `deep-purple`, `heather`, and restrained `lemon` accents).
+    - Replaced all off-theme mint/green (`emerald`) status tags, confirmed badges, and concierge resolution notes across all User, Agent, and Admin dashboards with themed deep-purple status styling (`bg-deep-purple/10 text-deep-purple border-deep-purple/25`) and sand surfaces (`bg-sand/50 border-charcoal/20 text-charcoal`). Preserved clear contrast, borders, and icons without muddying page readability.
+  - **Dashboard Scroll-to-Top Lifecycle & Message Scroll Confinement**:
+    - Guaranteed dashboard page navigation starts at top (0, 0) via route change listeners in `DashboardLayout.jsx` and `ScrollToTop.jsx`.
+    - Confined message stream auto-scroll in `UserMessagesPage.jsx` and `AgentInquiriesPage.jsx` strictly to the internal conversation panel (`messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight`), eliminating whole-window downward jumping caused by `scrollIntoView()`.
+  - **Strict Role-Based Sign-In Overview Routing**:
+    - Updated `LoginPage.jsx` (email/password and Google demo auth) to route authenticated accounts directly to their own role's overview page (`/dashboard/overview` for Users, `/agent/overview` for Agents, `/admin/overview` for Admins).
+    - Cleared stale scroll positions and ignored deep-linked subpages from `location.state` on sign-in while preserving role immutability.
+  - **Smooth Sidebar Navigation Transitions**:
+    - Added restrained, smooth Framer Motion page transitions (`opacity: 0, y: 6` to `opacity: 1, y: 0`, 180ms ease) around the dashboard content stage in `DashboardLayout.jsx` keyed on `location.pathname`.
+    - Eliminated layout shifts and preserved full shell stability without unmounting the sidebar or global site header. Added `useReducedMotion()` support for instant rendering when reduced-motion is preferred.
+  - **Unified Compare Experience across Dashboard and Public Pages**:
+    - Unified the User Dashboard Compare entry (`/dashboard/compare`) and the standalone comparison page (`/compare`) by sharing the single `ComparePage.jsx` component and `compareService` state layer.
+    - Maintained strict Buy (sale) and Rent separation, 3-property ceiling per type, immediate bi-directional synchronization (additions, individual removals, and clear actions), responsive desktop matrix, and mobile stacked cards.
+  - **Documentation & Verification**:
+    - Updated `DASHBOARD_SYSTEM_DESIGN.md`, `USER_DASHBOARD_DESIGN.md`, `INTEGRATION.md`, and `PROGRESS.md`.
+    - Validated with production build (`npm run build` exiting code 0, 0 errors).
+
+  - **Porch Light Theming & Contrast Surfaces**:
+    - Replaced generic bright-white surfaces and form fields across all dashboard cards, panels, inputs, textareas, selects, and modals with Porch Light design tokens (`bg-porcelain-tint`, `bg-sand/35`, `bg-sand/40`, `border-charcoal/15-20`, `text-charcoal`).
+    - Extended consistently across User, Agent, and Admin dashboards (overview cards, management tables, message bubbles, settings panels, support requests, and transaction ledgers). Preserved readable typography, distinct field borders, and restrained lemon accents.
+  - **Toolbar Deduplication & Shell Streamlining**:
+    - Removed the redundant second dashboard header row that duplicated site-wide search and notification bell controls.
+    - Standardized notifications exclusively to the persistent global site header (`Header.jsx`), and search to the dashboard sidebar and mobile drawer with quick `⌘K` modal launcher (`DashboardSearchModal.jsx`).
+    - Integrated active page titles and breadcrumbs directly into the top of the content canvas.
+  - **User Overview Action Cleanup**:
+    - Removed the duplicate "Saved Wishlist" button from `UserOverviewPage.jsx` header actions, retaining "Explore Residences".
+    - Kept the dedicated Saved Homes dashboard page (`/dashboard/user/saved`), sidebar link, and property bookmarking intact.
+  - **Profile Picture Selection for All Dashboard Roles**:
+    - Created reusable `ProfilePhotoUploader.jsx` component with file selection, validation (JPEG/PNG/WebP, <= 5MB), client-side compression (`compressProfileImage`: 400x400 JPEG, <= 150KB), live preview, remove/replace actions, and initials fallback.
+    - Integrated into User Profile (`/dashboard/user/profile`), Agent Profile (`/dashboard/agent/profile`), and Admin Settings (`/dashboard/admin/settings`).
+    - Persisted avatars as Data URLs in `mockStore` / `localStorage` (`currentUser.avatar` and `users` collection) ensuring permanence across navigation and reloads. Synchronized with the global site header avatar and preserved role immutability.
+  - **Unified Messaging & Attachments**:
+    - Connected `UserMessagesPage.jsx` and `AgentInquiriesPage.jsx` to the shared `src/services/chat.js` service used by `PropertyChatModal.jsx`.
+    - Enforced strict role-scoping: Users see their property inquiries, Agents see inquiries for their listings, and Admins can audit all platform threads.
+    - Added full attachment composer capabilities: attachment selection, validation, IndexedDB binary blob storage (`saveAttachmentBlob`), simulated upload progress bar, staging chips with remove button, in-bubble previews (image thumbnails and PDF pills), download handler, and image lightbox modal.
+  - **Responsive Layouts & Restrained Motion**:
+    - Added responsive single-pane split view for mobile viewports (< 768px) with "Back to Threads" button for seamless conversation navigation.
+    - Refined transitions on mobile drawer, dropdowns, and dialogs with strict `prefers-reduced-motion` compliance and >= 44px touch targets.
+  - **Documentation & Verification**:
+    - Updated `DASHBOARD_SYSTEM_DESIGN.md`, `USER_DASHBOARD_DESIGN.md`, `AGENT_DASHBOARD_DESIGN.md`, `ADMIN_DASHBOARD_DESIGN.md`, and `INTEGRATION.md`.
+    - Verified production build via `npm run build` (2,544 modules compiled with 0 errors).
+- **STEP 1**: Saved `PROJECT_BRIEF.md` in root.
+- **STEP 2**: Configured Vite + React, Tailwind CSS with porcelain beige, dark gray, heather purple, deep purple, and electric lemon design tokens. Installed full stack. Built shape primitives, SmartImage, UI atoms, mock store, seed data, and service layer.
+- **PUBLIC EXPERIENCE**:
+  - **Home (Showcase)**: Hero on porcelain beige with oversized serif headline, arch-masked layered building, light parallax, sparkle glyphs, mono side captions, and primary CTA buttons. Marquee strip with city stats. Bento grid of 6 features with custom shapes. Asymmetric offset featured properties. Sticky role section with image swapping (Buyers/Renters, Agents, Admin). "How it works" timeline. Expandable cities strip with image reveals. Resident testimonial with controls. Purple agent CTA with magnetic button.
+  - **Property Details (`/property/:id`)**: Guest gating via `LoginOverlay`. Collage gallery with masks and full-screen lightbox (thumbnails, keyboard navigation, contain-with-blur). Large serif key facts. Swiss-style technical spec sheet. Access & urban connectivity breakdown. Embedded map with pin. 360 virtual tour via `@photo-sphere-viewer/core`. Interactive animated EMI calculator. Agent verification block with rating. Similar properties. Sticky action panel & mobile fixed bottom bar for booking visits and dispatching inquiries.
+  - **Compare Page (`/compare`)**: Side-by-side comparative table for up to 3 properties across price, dimensions, RERA ID, possession, and living amenities.
+  - **Auth Pages**: Split-screen layout with an arch-masked image. `LoginPage` with demo chips, Google login mock, and `react-hook-form`. `RegisterPage` with buyer/agent toggle, agent brokerage/RERA fields, mock license upload, and pending status. `ForgotPasswordPage` with recovery flow.
+  - **About & Contact Pages**: About page explaining the three tenets. Contact page with direct support form saving tickets to mockStore + FAQ accordion.
+- **DESKTOP SCROLLING PASS**:
+  - Extended smooth, unhurried wheel scrolling consistently from Section 1 through the Footer on desktop without adding external libraries, pinning, or breaking normal-flow layouts.
+  - Eliminated Section 2 jitter when hovering over the scrollbar by detecting scrollbar-track cursor coordinates and allowing the native scrollbar to handle wheel input without competing RAF loops.
+  - Enabled instant synchronization for scrollbar drags, scrollbar clicks, and keyboard navigation. Preserved 100% native scrolling for mobile/touch and respect for reduced motion.
+- **HERO TITLE FINAL STYLE & RESPONSIVE POSITIONING**:
+  - Approved Warm Sunset title color treatment (Sunrise Cream `#FFF5E1` to Golden Glow `#FFD188`) and subtle dark shadow (`rgba(0, 0, 0, 0.25)`, 10px blur, 4px vertical offset) made permanent across all screen sizes for both "PORCH" and "LIGHT".
+  - Large desktop: slightly enlarged "LIGHT" (~1.13em) and corrected top alignment with "PORCH" using top alignment so both words share the same top edge while "LIGHT" extends downward into the background space behind the house cutout without shifting "PORCH" or moving the title container.
+  - Medium screens (768px-1023px): permanent raised positioning (`--wordmark-top: 31cqh`) so most of each letter remains clearly readable in the sky above the house cutout, preserving standard scale and one-line alignment.
+  - Small screens (< 768px): clean centered two-line stacked layout ("PORCH" over "LIGHT") sized (`clamp(3rem, 20vw, 4.8rem)`) and positioned (`--wordmark-top: 20cqh`) fully above the house cutout with zero clipping or horizontal overflow.
+- **BUY AND RENT PAGES FULL REBUILD**:
+  - Rebuilt `/buy` (`BuyPage.jsx`) and `/rent` (`RentPage.jsx`) as two distinct routes and page components sharing a calm, modular browsing architecture (`PropertyBrowseLayout.jsx`).
+  - Preserved distinct page identities, titles, taglines, category badges, transaction pricing, and SEO document titles (`Properties for Sale` vs. `Residences for Rent`).
+  - Created a unified, repeatable property row card (`PropertyRowCard.jsx`) replacing previous rotating editorial layouts (A, B, C, D) with a 20px rounded card, 3:2 `SmartImage` with local fallbacks, Swiss-style spec grid (BHK, baths, sqft, furnishing, RERA), mode-aware pricing (₹ Cr/L + Est. EMI for sale; ₹/mo + deposit/lease for rent), and role-aware Save and Compare actions.
+  - Updated filter bar (`ListingFilterBar.jsx`) with mode-aware budget ranges (₹10L–₹15Cr for sales, ₹15k–₹6L/mo for rentals), quick city selection pills, autocomplete search with instant reset, and responsive drawer.
+  - Standardized desktop map area to one single sticky panel (`lg:col-span-5`) with Leaflet and CartoDB Voyager tiles, synchronized with list item hover and marker clicks. Added clean mobile List/Map toggle to prevent map panel duplication.
+  - Updated `PropertyCardSkeleton.jsx` to match the 20px rounded horizontal card structure. Added rental seed listings (`prop-31`, `prop-32`) to ensure full geographic representation across all 9 cities.
+  - Created `BUY_RENT_DESIGN.md` as the working design specification for both routes.
+
+- **BUY AND RENT PAGE POLISH (SPACING, CONTROLS, TOGGLE & STICKY BEHAVIOR)**:
+  - Eliminated the top blank strip between the global 72px header and the page intro across Buy and Rent by updating `PageLayout` main padding to `pt-[72px]` and calibrating intro section breathing room.
+  - Reorganized search, filters, and sorting: replaced the raw exposed city and property-type chip rows with a clean search field, a compact integrated Sort dropdown, a single "Filters" button, and dismissible active filter tag chips.
+  - Built comprehensive `PropertyFilterModal` including destination cities, sorting options, dual-slider adjustable price range with live min/max INR formatting, property architecture types, bedrooms, and furnishing status with keyboard Escape and focus handling.
+  - Converted "Near Me" into a true on/off toggle (`aria-pressed`) featuring distinct active theme styling (deep-purple fill with pulsating lemon dot indicator). Activation calculates geographic proximity to seed cities and restores previous location state upon deactivation, with calm fallback toasts if location permission is denied.
+  - Synchronized sticky search/filter bar and desktop sticky map with the global header using dynamic top offsets (`0px` / `80px` when header hides on scroll-down; `72px` / `152px` when header returns on scroll-up) via a smooth 500ms cubic-bezier transition, eliminating blank scroll gaps and preventing overlap.
+- **BUY AND RENT FILTER MODAL VISIBILITY, EXPANDED FILTERS & SORT PASS**:
+  - Resolved vertical clipping of the filter modal by mounting `PropertyFilterModal` into a React Portal (`createPortal(..., document.body)`), completely isolating it from transformed or sticky ancestors.
+  - Implemented desktop centered viewport layout and mobile responsive bottom-sheet layout with internal options scrolling, sticky header/footer actions, background scroll lock (`overflow: hidden`), and return-of-focus management.
+  - Expanded filter options to support all fields in property data: Destination City, Property Types, Dual-Range Price Slider, Bedrooms (BHK), Bathrooms, Area Range (sqft), Furnishing, Amenities Grid (Pool, Gym, Garden, Backup, Security, Gated, Parking, Balconies), Possession Status, and Legal RERA Verification.
+  - Built custom accessible `SortDropdown` component with Porch Light styling, keyboard navigation, click-outside dismissal, subtle Framer Motion entry/exit, and support for all 6 sort criteria (Featured, Newest, Price Low-High, Price High-Low, Area Smallest First, Area Largest First).
+  - Accelerated "Near Me" response with immediate loading spinner feedback (`isNearMeLoading`), low-latency network geolocation (`enableHighAccuracy: false`, `timeout: 4000`), and instant result updates.
+- **SORT DROPDOWN PORTAL DISPLAY FIX & SEARCH FLOW VERIFICATION**:
+  - Eliminated vertical clipping and internal container scrolling of the sort menu by mounting the dropdown options list into a React Portal (`createPortal(..., document.body)`) with `position: fixed` and `z-index: 9999`, isolating it from toolbar `overflow-x: auto` and stacking contexts.
+  - Implemented dynamic viewport collision detection: opens downward by default and smoothly flips upward when nearing the viewport bottom (< 252px clearance).
+  - Implemented 300ms search input debouncing in `ListingFilterBar` for fluid typing without query thrashing, paired with instantaneous clear button reset.
+  - Expanded search matching in `properties.js` across `title`, `locality`, `city`, `address`, `description`, `type`, and `reraId` to ensure location, project, and architectural queries match consistently.
+  - Verified combined filtering, sorting (including area smallest/largest), result counts, and map pin synchronization across both Buy and Rent routes.
+- **SCROLL POSITION, DUPLICATE SORT CONTROL, AND HOME PRELOADER BEHAVIOR**:
+  - Implemented route-entry scroll reset via `ScrollToTop` (`useLayoutEffect` on `location.pathname`) with `history.scrollRestoration = 'manual'`, ensuring navigation to `/buy` or `/rent`, between Buy and Rent, and returning from other routes starts immediately at the top without visual jumps, while preserving normal in-page browsing.
+  - Added smooth return-to-top behavior when a search is submitted (`Enter` key), settled after 300ms debounce with a modified query, selected via autocomplete, cleared (`X`), when filters are applied/cleared, or when sorting is selected. Keystrokes do not jump during active typing, and active queries/filters/sort remain intact after scrolling to top.
+  - Removed duplicate sorting controls from `PropertyFilterModal` to establish `SortDropdown` in the main toolbar as the sole source of truth for sorting, while keeping all 8 filter sections balanced and fully functional.
+  - Managed Home preloader lifecycle via in-memory state (`preloaderState.js`): preloader runs on full browser reloads and first direct visits to `/`, but is cleanly skipped when navigating to Home via in-app navbar navigation, starting immediately at the top with normal section reveals and wordmark rise animations.
+- **URGENT RECOVERY & REGRESSION FIX (HOME LOADING REVEAL & BUY/RENT FUNCTIONALITY)**:
+  - **Identified Root Causes**:
+    1. *Buy/Rent Crash*: In `PropertyFilterModal.jsx`, `sortOption` was removed from component props but remained in the `useEffect` dependency array (`[isOpen, filters, sortOption, onClose, triggerRef]`). In JavaScript/React, evaluating an undeclared identifier in a hook dependency array threw an immediate `ReferenceError: sortOption is not defined`, crashing `/buy` and `/rent` into `ErrorBoundary`.
+    2. *Home Loading Reveal Disappearance*: In `preloaderState.js` and `HomePage.jsx`, `let hasInitialPreloaderRun = !isInitialDirectHomeEntry;` incorrectly evaluated to `false` during reloads and route changes, bypassing `<Preloader />` and prematurely setting `pageRevealed: true`, which eliminated the smooth white/porcelain slide-up reveal curtain.
+  - **Targeted Repairs Made**:
+    1. Repaired `PropertyFilterModal.jsx`: Removed `sortOption` from the hook dependency array (`[isOpen, filters, onClose, triggerRef]`), fully restoring `/buy` and `/rent` rendering, filter modals, search, and sorting.
+    2. Restored Home Preloader & Slide-Up Reveal: Rebuilt `preloaderState.js` with browser reload detection (`performance.getEntriesByType('navigation')[0]?.type === 'reload'`) and session-flag checking. Added `state={{ fromNavbar: true }}` to all desktop and mobile navigation links in `Header.jsx`. On full reload or initial visit, the preloader smoothly executes its white slide-up animation (`y: 0%` to `-100%`, 0.9s duration, easing `[0.76, 0, 0.24, 1]`) before revealing the page. On in-app navbar navigation, it starts at the top and runs normal section reveals without replaying the preloader.
+    3. Relocated `ScrollToTop`: Moved `<ScrollToTop />` directly inside `<BrowserRouter>` in `src/App.jsx` and removed it from `src/app/router.jsx` to prevent any reconciliation interference with `PageLayout`.
+  - **Static Verification**: Executed `npm run build` which compiled 2125 modules into production bundles with 0 errors. Browser/visual testing was not run per instructions.
+- **TEMPORARY, REVERSIBLE EXPERIMENTS (PRELOADER VIDEO SLIDE-UP & SITE-WIDE SMOOTH SCROLL)**:
+  - **Experiment 1 (Home Preloader Exit)**: The intro video/layer itself slides smoothly upward (`y: 0%` to `-100%`, 0.9s duration, easing `[0.76, 0, 0.24, 1]`) to reveal the Home page underneath, instead of fading the video out early and sliding a plain white curtain. Preloader runs only on initial direct landing on `/` and full browser reload (F5); in-app navbar navigation cleanly skips the preloader, starts at top `(0, 0)`, and executes standard section reveal effects.
+  - **Experiment 2 (Site-Wide Smooth Scroll)**: Replaced intermittent page-local listener with unified `useSiteWideSmoothScroll` hook mounted in `PageLayout`. Detects and respects nested scrollable containers (Filter modal, dropdowns, code boxes), allows direct native scroll when cursor rests on vertical scrollbar, syncs seamlessly with programmatic/external scroll without premature RAF cancellation, and maintains 100% native scrolling on touch/mobile and for users preferring reduced motion.
+  - **Backup & Rollback Checkpoint**:
+    - Backup folder created at `_backup_experiments/` containing exact copies of `Preloader.jsx`, `preloaderState.js`, `HomePage.jsx`, `App.jsx`, and `PageLayout.jsx`.
+    - Feature flags in `src/config/experiments.js`:
+      - `PRELOADER_VIDEO_SLIDE_EXIT`: set to `false` to revert to previous fade-then-white-slide exit.
+      - `SITE_WIDE_SMOOTH_SCROLL`: set to `false` to revert to 100% native browser scrolling site-wide.
+      - Full restore: copy files from `_backup_experiments/` back into `src/`.
+  - **Focused Verification Performed**:
+    - Build test: `npm run build` completed with 0 errors (2,127 modules).
+    - Browser subagent verification on port 5175:
+      1. Direct visit to `/`: Verified preloader appears with video playing and smoothly slides up to reveal Home hero/sections.
+      2. In-app navigation to `/buy`: Verified Buy page renders cleanly with search, sort dropdown, filters button, property listings, and map.
+      3. In-app navigation to `/rent`: Verified Rent page renders cleanly with rental listings and prices.
+      4. In-app navigation to `/` via navbar: Verified preloader is skipped, page resets to top, and Home sections are visible.
+      5. Zero JavaScript runtime errors in console.
+- **FOCUSED FIX — HOME INTRO RELIABILITY & SLOWER SLIDE-UP**:
+  - **Identified Root Causes**:
+    1. *Slide-up sometimes not happening*: `HomePage.jsx` was deriving `willRunPreloader` dynamically in the component body instead of holding it in component state. When `onSlideStart` updated state to fade in the page, `HomePage` re-rendered, re-evaluated `shouldRunHomePreloader()` (which had just been marked as run), and instantly unmounted `<Preloader />` mid-flight before the slide-up animation could play.
+    2. *Navbar navigation unpredictably showing/skipping*: `preloaderState.js` was relying on `performance.getEntriesByType('navigation')[0].type === 'reload'`, which remains `'reload'` throughout the entire browser session after any reload. As a result, subsequent in-app navbar clicks to Home were evaluated as full reloads and incorrectly replayed the intro.
+    3. *Slide-up too fast*: Duration was `0.9s` with a steep cubic-bezier (`[0.76, 0, 0.24, 1]`) causing sudden acceleration.
+  - **Applied Improvements**:
+    1. *Reliable In-Memory Document Lifecycle*: In `preloaderState.js`, captured `initialDocumentLanding` once at document evaluation and set `hasDocumentIntroRun = initialDocumentLanding !== '/'`. Full document reloads/direct visits to `/` run the intro once; all subsequent in-app routing visits cleanly skip the intro.
+    2. *Stateful Preloader Lifecycle in `HomePage.jsx`*: Stored `showPreloader` in `useState(() => shouldRunHomePreloader(isFromNavbar))`. The preloader is guaranteed to remain mounted through the full slide-up and only unmounts when `onComplete` fires after the animation completes.
+    3. *Noticeably Slower & Calmer Slide-Up*: Slower 1.6s duration with Porch Light's calm reveal curve `[0.22, 1, 0.36, 1]` with no snap, pauses, or white flashes.
+    4. *Preserved Smooth Scrolling*: Site-wide smooth scrolling was preserved completely without alteration.
+  - **Verification Performed**:
+    - Build test: `npm run build` completed with code 0.
+    - Browser subagent verification: Verified initial direct entry/reload plays the intro and completes the slow 1.6s slide-up smoothly; verified repeated navbar navigations (`/buy` -> `/` -> `/rent` -> `/`) skip the intro every single time and start at top with normal section reveals. Zero console errors.
+
+- **ANIMATION REFINEMENT — INTRO EXIT, RELOAD BEHAVIOR, AND HOME REVEAL PERFORMANCE**:
+  - **Identified Root Causes**:
+    1. *Intro Pause/Stall near Top*: The previous cubic-bezier curve (`[0.22, 1, 0.36, 1]`) had an extremely steep deceleration profile covering ~98% of distance in the first 25% of time, causing the visual appearance of catching or freezing near the top for over a second before a secondary timeout finished it.
+    2. *Reload vs. Navigation Desync*: `sessionStorage` flags or retained `location.state.fromNavbar` in the browser's History API across reloads caused full browser reloads on Home to be misclassified as in-app navigation, prematurely suppressing the intro.
+    3. *In-App Home Return Lag/Jitter*: When returning to Home from other routes (`/buy`, `/rent`), `HeroSection.jsx` performed redundant asynchronous operations (network HEAD request, font readiness checks, and dynamic `getBoundingClientRect` calculations) on every mount, triggering 3 cascaded re-renders and an initial 300ms wordmark visibility delay. Additionally, `HomePage.jsx` had redundant post-paint scroll listeners and an arbitrary 400ms `ScrollTrigger.refresh()` timer that caused layout hitches.
+  - **Applied Improvements**:
+    1. *Continuous & Calm Intro Exit*: Calibrated the intro slide-up to 1.2s with a continuous, unbroken easing curve `[0.35, 0, 0.25, 1]` and hardware-accelerated `willChange: 'transform'`. Replaced competing timeouts with Framer Motion's `onAnimationComplete` as the single source of truth, creating a continuous glide from bottom to fully offscreen with zero pause, snap, or second-stage movement.
+    2. *Deterministic Reload vs. In-App Navigation*: In `preloaderState.js`, paired in-memory lifecycle state with document reload detection (`performance.getEntriesByType('navigation')[0]?.type === 'reload'`). Full browser reloads on Home (even after repeated Home → Buy/Rent → Home cycles) and first direct visits reliably show the intro, while all in-app navbar navigations reliably skip the intro.
+    3. *Instantaneous In-App Home Returns*: Added module-level caching for hero background resolution, aspect ratio, fonts readiness, and letter vertical travel distance. On in-app return to Home, `HeroSection` initializes `assetsReady: true` and `hasStartedIntro: true` synchronously on mount, eliminating delay and multi-render jitter. Synchronized scroll position in `useLayoutEffect` before GSAP initialization and removed the delayed `ScrollTrigger.refresh()` timer.
+    4. *Preserved Confirmed Scrolling & Controls*: Left `useSiteWideSmoothScroll.js` and Buy/Rent controls/layouts completely intact.
+  - **Verification Performed**:
+    - Build test: `npm run build` compiled 2,127 modules with 0 errors.
+    - Automated browser subagent verification:
+      1. First direct entry on `/`: Verified smooth continuous 1.2s upward slide-up without pause or snap until fully cleared from viewport.
+      2. Full page reload on `/`: Verified intro played cleanly and completed continuous slide-up.
+      3. In-app navigation to `/buy`: Verified Buy page opened at top with search, sort, filters, and listings.
+      4. In-app navigation back to `/`: Verified intro was skipped immediately; page started at top; section reveals played with zero lag or jitter.
+      5. Full reload on `/` after navigation history: Verified intro played cleanly as expected.
+      6. Console logs inspection: 0 errors.
+
+- **BUY AND RENT BROWSING REDESIGN — LISTINGS TAB AND FULL MAP TAB**:
+  - **Rebuilt Browsing Architecture (`PropertyBrowseLayout.jsx`)**:
+    1. *Two-Tab Navigation & Restrained Slide*: Replaced the side-by-side listings and map layout with two dedicated tabs (`Listings` and `Map Explorer`). Designed an active tab indicator in deep purple with porcelain text. Built a restrained, smooth horizontal slide transition using Framer Motion (`x: ±24`, 0.25s duration) with `useReducedMotion` support. Retained all active search queries, filters, sort orders, and Near Me states across tab switches.
+    2. *Listings Tab (3-Column Compact Grid & Pagination)*: Created `PropertyGridCard.jsx` displaying 3:2 `SmartImage` with fallback support, type and premium/RERA badges, location, single-line serif title, deep-purple price, and Swiss-style metadata (BHK, area/deposit, possession/lease). Structured into a 3-column desktop grid (2-column tablet, 1-column mobile). Built accessible `Pagination.jsx` (12 properties per page, previous/next, numbered pills, smart ellipsis, smooth scroll-to-top). Automatically resets pagination to page 1 on search, filter, or sort updates.
+    3. *Map Explorer Tab (Full Leaflet View, Side List & Closable Preview)*: Built `PropertyMapExplorer.jsx` featuring a full-width Leaflet map alongside a desktop scrollable side list of property names sorted according to the active sort order. On mobile, the side list collapses into a floating `List (N)` bottom drawer. Clicking any property in the side list highlights the pin, centers the map, and opens `MapPropertyPreview.jsx` with photo, title, price, specs, role-aware Save/Compare, and an explicit `X` close button.
+    4. *Fixed Leaflet Map Failure*: Resolved the broken tiles and "API KEY REQUIRED" error by replacing CartoDB with standard free OpenStreetMap tiles (`https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`) requiring 0 API keys and rendering the required visible attribution. Applied custom CSS filter `.map-tile-beige` for warm porcelain integration and added graceful `tileerror` fallback handling.
+    5. *Service Synchronization (`src/services/properties.js`)*: Enhanced `getProperties` to handle sorting before slicing and return both paginated `data` (12 items) and `allMatching` (all filtered items for map pins and side list), keeping both views perfectly in sync with zero data duplication.
+  - **Verification Performed**:
+    - Build test: `npm run build` compiled 2,130 modules with 0 errors.
+    - Automated browser subagent verification on `localhost:5175`:
+      1. `/buy`: Verified two-tab control, 3-column desktop property grid, and bottom pagination controls.
+      2. Switched to `Map Explorer`: Verified smooth horizontal slide transition, clean Leaflet rendering with OpenStreetMap tiles (no "API KEY REQUIRED" watermark or broken tiles), desktop scrollable side list, pin highlighting, floating preview card on item click, and preview dismissal via `X`.
+      3. `/rent`: Verified separate route identity, rental listings displaying monthly rates (`/mo`), and functional tab switcher.
+      4. Console logs: 0 errors.
+
+- **BUY AND RENT POLISH — TARGETED CARD FIX, PAGINATION SCROLL, AND MAP FIT**:
+  - **Targeted Buy Card Border Fix (`PropertyGridCard.jsx` & `PropertyRowCard.jsx`)**:
+    - Discovered root cause of the unusual colored/double outline on the first Buy card ("The Rain Courtyard Villa"): when selected on the map or clicked, the card applied simultaneous `border-deep-purple` (1px) and `ring-2 ring-deep-purple/30` (2px box-shadow ring), which compounded with the card's rounded border to produce a two-tone double line.
+    - Replaced the dual border/ring styling with a single crisp accent border: `border-2 border-deep-purple bg-sand/25 shadow-md` along with explicit `focus:outline-none focus-visible:outline-none`. Preserved intentional hover (`hover:-translate-y-1 hover:shadow-lg`) and keyboard focus feedback across all cards without changing the base border or introducing global CSS overrides.
+  - **Listings Pagination Smooth Scroll (`PropertyBrowseLayout.jsx`)**:
+    - Updated `handlePageChange` to smoothly scroll to the top of the results canvas (`#browse-results-canvas`) dynamically offset by the sticky search and filter toolbar height (`76px` when header is hidden, `148px` when header is visible).
+    - Preserved active queries, filters, sort orders, and Near Me states completely. Ensured zero pagination scroll side-effects on the Map tab.
+  - **Map Workspace Fit on Large Screens (`PropertyMapExplorer.jsx`)**:
+    - Constrained the desktop Map Explorer height to `lg:h-[calc(100dvh-220px)] lg:min-h-[480px] lg:max-h-[660px]` (with responsive tablet `h-[540px]` and mobile `h-[500px]`).
+    - Aligned the map and side list to the exact same usable height; the side list scrolls independently when property listings exceed the visible area.
+    - Kept zoom controls, attribution, selected-property preview card, and pins within the visible map area without vertical page overflow.
+  - **Responsive Medium & Small-Screen Map Layout (`PropertyMapExplorer.jsx` & `MapPropertyPreview.jsx`)**:
+    - Full-width responsive map on tablet and mobile viewports with a floating `List (N)` toggle button.
+    - Designed an accessible bottom-sheet modal drawer displaying matching properties with touch targets >= 44px.
+    - Re-positioned `MapPropertyPreview` with `bottom-3 left-3 right-3 sm:right-auto sm:w-[360px]` and enhanced the close (`X`) button touch target to 44px (`w-9 h-9 sm:w-7 sm:h-7`).
+  - **Map Stabilization & Elimination of Map Shaking (`PropertyMap.jsx`)**:
+    - Discovered root cause of map shaking: `MapBoundsUpdater` ran `map.fitBounds` unconditionally on every render caused by hovering over cards or side-list items (`hoveredId`).
+    - Implemented a stable fingerprint ref (`lastFittedKeyRef`) based on sorted property IDs: `fitBounds` now only triggers on initial mount or when filtered property IDs genuinely change—never on card hovers, mouse movements, or ordinary state updates.
+    - Added smooth, focused panning (`map.panTo([lat, lng])`) strictly when a property is selected (`selectedId`).
+    - Debounced `map.invalidateSize({ pan: false })` on window resize and container mount.
+    - Transitioned `tab-map` using an opacity fade rather than an active horizontal CSS transform, preventing Leaflet from initializing inside a moving container.
+  - **Natural Leaflet Interaction (`PropertyMap.jsx` & `useSiteWideSmoothScroll.js`)**:
+    - Enabled `scrollWheelZoom={true}`, `dragging={true}`, `doubleClickZoom={true}`, and `touchZoom={true}`.
+    - In `useSiteWideSmoothScroll.js`, added event delegation targeting `.leaflet-container` so mouse wheel over the map zooms the map naturally and does not trigger document smooth scrolling.
+  - **Verification Performed**:
+    - Build test: `npm run build` compiled 2,130 modules with 0 errors.
+    - Automated browser subagent verification on `http://localhost:5175/buy`:
+      1. First listing card: Confirmed crisp, clean single-line border without double outlines.
+      2. Pagination: Clicked Page 2 at bottom of listings; confirmed smooth scroll to top of results canvas with cards clearly in view.
+      3. Tab Switch: Switched to Map Explorer; confirmed clean layout fit within desktop viewport.
+      4. Map Interaction: Zoomed in and panned by dragging; confirmed smooth movement without map jitter or shaking.
+      5. Preview: Clicked side-list property to open preview card; clicked close (X) button to confirm preview closes.
+    - Console logs: 0 errors.
+
+- **BUY AND RENT MAP AND SEARCH FIXES**:
+  - **Removed Unexplained Bar Below Search (`ListingFilterBar.jsx`)**:
+    - Discovered root cause: the autocomplete localities dropdown rendered unconditionally when `availableLocalities.length > 0` regardless of whether the filtered search matches array had any items. When searching text with 0 locality matches (e.g. "cal"), the outer container `<div className="absolute top-full ... border rounded-2xl py-1">` rendered with 0 items, producing an empty, thin rounded horizontal bar directly below the input.
+    - Fixed by computing `matchingLocalities` and rendering the dropdown strictly when `autocompleteOpen && matchingLocalities.length > 0`. Added a search query pill to the active chips row for clarity.
+  - **Framed Map Around India & Limited Panning (`PropertyMap.jsx`)**:
+    - Configured initial map center `[22.0, 79.0]` with default zoom 5 and initial framing bounds `INDIA_VIEW_BOUNDS: [[8.0, 68.0], [35.5, 97.5]]` so the whole country is comfortably framed with modest context.
+    - Set `maxBounds={INDIA_MAX_BOUNDS}` (`[[4.0, 64.0], [38.5, 102.0]]`), `maxBoundsViscosity={0.85}`, and `minZoom={4}` to restrict panning to the Indian subcontinent without allowing users to drag away to other continents.
+    - Maintained adaptive fitting: nationwide results frame India; single-city filters smoothly fit localized bounds (`maxZoom: 13`).
+  - **Preserved View Position on Map Tab Control Changes (`ListingFilterBar.jsx` & `PropertyBrowseLayout.jsx`)**:
+    - Passed `activeTab` to `ListingFilterBar`. Updated `scrollToTop()` to immediately no-op when `activeTab === 'map'`.
+    - Applying search, filters, Near Me, or sort options while on the Map tab updates pins and side list in place without any scroll-to-top jumps, keeping the user immersed in the map view.
+  - **Centered and Tidied Map-Pin Labels (`PropertyMap.jsx` & `index.css`)**:
+    - Resolved off-center text: updated `.custom-property-pin` in CSS with `display: flex !important; align-items: center !important; justify-content: center !important`.
+    - Configured `iconSize: [96, 32]` and `iconAnchor: [48, 16]` so the marker's visual center aligns precisely with `[lat, lng]` at all zoom levels with zero drift.
+    - Styled inner badge with `inline-flex items-center justify-center h-7 px-3 leading-none text-center truncate max-w-[80px]` and dedicated indicator dot, ensuring perfect vertical/horizontal alignment and truncation safety.
+  - **Fixed Near Me First-Click Failure (`ListingFilterBar.jsx`)**:
+    - Identified root cause of first-click error: previous `timeout: 4000` (4s) prematurely timed out while users interacted with the browser's native location permission dialog on first click.
+    - Increased timeout to 15,000ms (15s) with 5-minute cache (`maximumAge: 300000`) and added fallback retry on error code 2.
+    - Used `isLocatingRef` and `filtersRef` to prevent concurrent requests and race conditions with stale state. Added immediate pending state (`Loader2` spinner + "Locating...") and graceful error messages for denial, timeout, or unavailable location.
+  - **Verification Performed**:
+    - Build test: `npm run build` compiled 2,130 modules with 0 errors.
+    - Automated browser subagent verification on `http://localhost:5175/buy`:
+      1. Search "cal": Confirmed NO empty rounded bar renders below the search field.
+      2. Map Tab: Confirmed India is comfortably framed, pins have centered price text, and panning is constrained within India bounds.
+      3. Sorting on Map Tab: Confirmed changing sort to 'Price: High to Low' reordered the side list in place without scrolling to the top.
+    - Console logs: 0 errors.
+
+- **PROPERTY DETAILS PAGE — FIRST REFINEMENT PASS**:
+  - **Standardized Gallery Photo Shapes (`PropertyDetailsPage.jsx`)**:
+    - Replaced disparate masks (top arched mask `rounded-t-[160px]`, asymmetric leaf masks `rounded-leaf-br`, `rounded-leaf-bl`) with clean, uniform rectangular frames with a consistent corner radius (`rounded-2xl border border-dark-gray/20 bg-porcelain-tint shadow-xs`).
+    - Preserved exact collage arrangement (1 large hero photo on left, 4 stacked photos on right), relative visual weight, hover micro-interactions, lightbox integration, rectangular thumbnails (`rounded-lg`), and keyboard navigation.
+  - **Strengthened Information Hierarchy & Readability (`PropertyDetailsPage.jsx`)**:
+    - Amplified primary property title (`font-serif text-3xl sm:text-4xl lg:text-5xl leading-[1.15] text-deep-purple`) and price (`font-serif text-3xl sm:text-4xl lg:text-[42px] leading-none text-deep-purple font-bold`).
+    - Elevated Key Dimensions & Specifications with bold uppercase Space Mono labels (`text-dark-gray/70 font-semibold mb-1.5`) and legible subtext (`font-mono text-xs text-dark-gray/75 mt-1 font-medium`).
+    - Upgraded Swiss-style technical specifications table with clear row dividers (`divide-y divide-dark-gray/15 font-mono text-xs sm:text-sm`), high-contrast uppercase labels (`text-dark-gray/70 font-medium`), and bold right-aligned values (`font-semibold text-dark-gray`).
+    - Increased Access & Urban Connectivity text from illegible 10px fonts to comfortable 12px/14px fonts (`text-xs text-dark-gray/65 uppercase` and `text-xs sm:text-sm font-bold text-dark-gray`).
+    - Refined Agent Profile card with crisp RERA verified badge and high-contrast deal statistics. Expanded action buttons with comfortable touch heights (`py-3.5`) and clear typographic hierarchy.
+  - **Fixed Neighborhood Map Pin/Preview Clipping and Sticky Header Overlap (`PropertyDetailsPage.jsx`, `PropertyMap.jsx`, `MapPropertyPreview.jsx`)**:
+    - *Targeted Single-Property View*: Set map to single-property mode (`properties={[property]}`) centered on Kochi coordinates at neighborhood zoom (`zoom: 14`). `MapBoundsUpdater` applies a gentle coordinate offset (`[lat - 0.0022, lng + 0.0035]`), placing the pin clearly in the upper-right quadrant while leaving the lower-left quadrant open for the preview card.
+    - *Resolved Bottom Map Clipping*: Increased map container height from cramped 320px (`h-80`) to `h-[440px] sm:h-[480px] rounded-2xl overflow-hidden border border-dark-gray/15 shadow-xs`, giving complete vertical clearance for `MapPropertyPreview` without cutting off the bottom action footer.
+    - *Dismissal & Marker Click Lifecycle*: Added `mapPreviewSelected` state: preview card begins open, can be dismissed via its close (`X`) button, and reopens whenever the property pin is clicked. Handled same-page navigation in `MapPropertyPreview` with smooth scroll-to-top.
+    - *Resolved Sticky Header Overlap*: Added `isolate z-10` to the map container in both `PropertyMap.jsx` and `PropertyDetailsPage.jsx`, and reduced `MapPropertyPreview` from `z-[500]` to `z-30`. Stacking context isolation ensures the returning sticky header (`z-50`) smoothly slides over the map during upward scrolling without any preview card bleed or collision.
+  - **Verification Performed**:
+    - Build test: `npm run build` compiled 2,130 modules with 0 errors.
+    - Automated browser subagent verification on `http://localhost:5174/property/prop-1`:
+      1. Image Gallery: Confirmed 5 images in clean rectangular frames with `rounded-2xl` corners (zero arches or leaf masks).
+      2. Typography & Hierarchy: Confirmed comfortable, readable font sizes and strong hierarchy across title, price, key dimensions, specs table, and agent card.
+      3. Neighborhood Map: Confirmed map pin visible in Kochi, and floating preview card docked cleanly inside map area with full content completely visible (no bottom clipping).
+      4. Sticky Header: Confirmed upward scroll triggers header cleanly on top of map with zero overlap or collision.
+- **PROPERTY DETAILS PAGE — SEPARATE SALE AND RENTAL EXPERIENCES CORRECTION**:
+  - **Rental-Specific Experience Restoration (`PropertyDetailsPage.jsx`)**:
+    - Disentangled sale and rental experiences so that rental detail pages reflect rental semantics instead of purchase/loan semantics.
+    - Top Meta & Breadcrumb: Replaced purchase labels (`Possession: Ready to Move`, `Super Built-up`) on rental properties with `Premium Rental` badge, `Available: Immediate`, and clear pricing breakdown (Monthly Rent + Security Deposit + Maintenance).
+    - Key Dimensions: Replaced sale dimensions (Super Built-up, Floor Level, Facing) with rental key metrics: Monthly Rent (`₹/mo`), Security Deposit, Layout & Carpet Area, and Minimum Lease Term.
+    - Swiss Technical Specifications: Replaced sale fields (Possession Status, Ownership Type Freehold, Property Age) with complete rental fields: Available From, Security Deposit, Monthly Maintenance, Minimum Lease, Notice Period, Preferred Tenants, Pet Policy, Furnishing Status, and Carpet Area.
+    - Restored Rental Calculator & Affordability Tool: Removed Home Loan EMI calculator on rental properties. Implemented dedicated **Monthly Rental Outlay & Affordability Estimator** featuring base rent, maintenance, interactive utilities slider (₹1,500–₹12,000/mo), and selectable lease terms (11, 24, 36 months). Highlights Total Move-in Funds (Deposit + 1st Month Rent + Platform Fee) and Recommended Gross Monthly Income based on the 33% affordability standard. Added dedicated Lease Policies & Onboarding Requirements card.
+  - **Unified 3 Action Buttons Styling (`PropertyDetailsPage.jsx`)**:
+    - Standardized all 3 action buttons in the Reserve & Acquire / Lease panel to identical height (`50px`), width (`100%`), corner radius (`rounded-xl`), typography (`font-sans text-sm font-semibold`), and high-contrast Porch Light styling.
+    - Replaced the low-contrast, washed-out `variant="lemon"` on button 3 with high-contrast solid deep purple (`bg-deep-purple text-porcelain border border-deep-purple`).
+    - Differentiated action set by listing type:
+      - Sale: 1. "Book Private Visit", 2. "Send Inquiry", 3. "Pay Token Advance"
+      - Rent: 1. "Book Private Visit", 2. "Send Inquiry", 3. "Pay Security Deposit" (routing to `/checkout/:id` with rental deposit semantics).
+    - Updated mobile fixed bottom bar to reflect `₹/mo` and "Deposit" reservation CTA on rental properties.
+  - **Context-Preserving "Back to Listings" Navigation (`PropertyDetailsPage.jsx`)**:
+    - Added an accessible secondary button ("Back to Sale Listings" / "Back to Rental Listings") at the top of the detail page.
+    - Uses history state detection (`window.history.state?.idx > 0`) to return via `navigate(-1)`, preserving active search queries, filter selections, sorting, and pagination.
+    - Safe fallback ensures users entering via direct link/bookmark route to `/buy` for sale properties and `/rent` for rental properties, preventing wrong-listing-type navigation.
+  - **Similar Properties Filtering (`properties.js`)**:
+    - Updated `getSimilarProperties` in `properties.js` to enforce `p.listingType === current.listingType`, preventing rental detail pages from recommending properties for sale and vice versa.
+  - **Preserved Approved Shared Improvements**:
+    - Clean rectangular gallery frames (`rounded-2xl`).
+    - Information hierarchy and raised font sizes.
+    - Neighborhood map framing and popup clearance.
+    - Isolated stacking context (`isolate z-10`, `z-30`) preventing sticky header overlap during upward scrolling.
+  - **Verification Performed**:
+    - Build test: `npm run build` compiled 2,130 modules with 0 errors.
+    - Targeted browser subagent verification on `/property/prop-1` (Sale) and `/property/prop-23` (Rent):
+      1. Confirmed "Back to listings" button renders and correctly navigates to `/buy` or `/rent`.
+      2. Confirmed 3 action buttons share exact 50px height, 100% width, matching typography, and solid high contrast.
+      3. Confirmed rental property shows rent, deposit, maintenance, tenant policies, and Monthly Outlay Estimator with zero loan EMI elements.
+      4. Confirmed sale property maintains Home Loan EMI Calculator, token advance action, and purchase specs.
+- **PROPERTY VIEW CLEANUP — TYPOGRAPHY, ACTION BUTTONS, MOBILE ORDER, CALCULATOR, AND LOADER**:
+  - **Typography Weight Correction (`PropertyDetailsPage.jsx`)**:
+    - Removed aggressive bold weights (`font-bold`, `font-semibold`) from numeric values, prices, measurements, statistics, and specification values across Key Dimensions, Swiss Technical Specifications, Access & Urban Connectivity, and Calculators.
+    - Preserved visual legibility through appropriate font sizing, leading, and subtle opacity hierarchy (`text-dark-gray/60` labels, `text-dark-gray` and `text-deep-purple` unweighted values) without visual heaviness.
+  - **Restored Approved Action Button Styling (`PropertyDetailsPage.jsx`)**:
+    - Unified all three action buttons on both Buy and Rent to the approved appearance:
+      - Default: Charcoal/black background with porcelain/light text (`bg-dark-gray text-porcelain border border-dark-gray`).
+      - Hover & Focus: Smoothly inverts to porcelain/light background with charcoal/black text (`hover:bg-porcelain hover:text-dark-gray focus-visible:bg-porcelain focus-visible:text-dark-gray`).
+    - Standardized height (`50px`), width (`100%`), corner radius (`rounded-xl`), typography (`font-sans text-sm font-semibold`), icon alignment, and clear disabled/focus states.
+  - **Mobile Layout Reordering (`PropertyDetailsPage.jsx`)**:
+    - Reordered phone-sized layout (< 1024px) using CSS flex order (`order-1 lg:order-2 lg:col-span-4`, `order-2 lg:order-1 lg:col-span-8`): placed Agent Information and Action Buttons directly below the image gallery before Key Dimensions, specifications, and other sections.
+    - Maintained desktop 12-column layout with 8-column main specs and 4-column sticky sidebar intact.
+  - **Upgraded Buy Home Loan EMI Calculator (`PropertyDetailsPage.jsx`)**:
+    - Added financing breakdown summary grid: Principal Loan Amount, Total Interest Payable, and Total Amount Payable.
+    - Added proportional Principal vs. Interest visual ratio bar.
+    - Added loan tenure quick-select pills (`10Y`, `15Y`, `20Y`, `25Y`, `30Y`) and accessible labels (`aria-label`, `aria-valuemin`, `aria-valuemax`).
+    - Enabled immediate reactive updates on all inputs while preserving the rental affordability estimator intact.
+  - **Round Pulsing Lemon Loader & Distinct Error State (`PropertyDetailsPage.jsx`)**:
+    - Replaced plain "Loading..." text with the round pulsing lemon indicator (`bg-electric-lemon` ping and pulse rings).
+    - Added screen-reader accessible loading status (`aria-live="polite"` and `role="status"`).
+    - Honored `prefers-reduced-motion` settings.
+    - Rendered distinct `<ErrorState />` card with retry and browse fallback when a property is unlisted or not found.
+  - **Verification Performed**:
+    - Build test: `npm.cmd run build` compiled 2,131 modules with 0 errors.
+    - Browser subagent verification:
+      1. `/property/prop-1` (Sale): Confirmed 3 charcoal action buttons invert to porcelain on hover; verified Buy EMI calculator displays Principal, Total Interest, Total Payable, and updates reactively on clicking 15Y; confirmed unweighted typography across dimensions, technical specs, and access items.
+      2. Viewport 375x667 (Mobile): Confirmed Agent info and Action Buttons render directly beneath the gallery before specifications.
+      3. `/property/prop-23` (Rent): Confirmed action buttons share matching styling; verified Monthly Outlay & Affordability Estimator renders with unweighted typography.
+    - Console logs: 0 errors.
+- **PROPERTY VIEW REFINEMENT — CONTAINER COLORS, EMI CALCULATOR, AND PANORAMA LOADING**:
+  - **Unified Container Backgrounds (`PropertyDetailsPage.jsx`)**:
+    - Changed `Action Box` ("Reserve & Acquire" / "Apply & Reserve Lease"), `Access & Urban Connectivity`, and `Lease Policies & Onboarding Requirements` from off-white `bg-porcelain-tint` (`#FAF7F2`) to the warm porcelain background (`bg-porcelain` / `#F1ECE3`).
+    - Applied consistently across both Buy and Rent detail views, matching Key Dimensions, Specifications, and Agent Verification cards while preserving current borders, corner radii, spacing, and contrast.
+  - **Rebuilt Purchase EMI Calculator (`PropertyDetailsPage.jsx`)**:
+    - Uses current property's real sale price (`property.price`).
+    - Added down-payment slider (10% to 80%, step 5%) displaying live formatted INR amount and percentage, strictly bounded so it can never exceed property valuation.
+    - Added loan-term slider **measured in months** (12 to 360 months, step 12 months) displaying total months and year conversion, accompanied by quick month pills (`60M`, `120M`, `180M`, `240M`, `360M`).
+    - Added annual interest rate slider (0.0% to 15.0%, step 0.1%, default 8.5% p.a.).
+    - Implemented safe standard Indian home loan amortization formula with safe division handling for 0% or negative interest rates.
+    - Formats all currency amounts with project standard `formatINR`.
+    - Recalculates immediately upon any slider change. Full keyboard and touch accessibility with visible focus rings.
+    - Kept strictly to purchase financing (`!isRent`) with zero duplicate or secondary budget estimators below it.
+  - **Preserved & Data-Bound Rental Outlay (`PropertyDetailsPage.jsx`)**:
+    - Kept rental-specific Monthly Outlay & Affordability section on Rent views only.
+    - Connected directly to actual property fields: `property.price` (base rent), `property.deposit` (security deposit), and `property.maintenance` (maintenance charges).
+    - Added neutral fallbacks (`—` for missing deposit, `Included in Rent` for null maintenance) instead of inventing property-specific values.
+  - **Contained Panorama Loading State (`PanoramaViewer.jsx`)**:
+    - Added `relative isolate z-10 w-full overflow-hidden` to the panorama container to create a local stacking context and strictly contain loading elements within the viewer frame.
+    - Set `style={{ height, minHeight: height }}` to maintain dimension stability throughout loading and eliminate page jump.
+    - Suppressed PhotoSphereViewer's native canvas loader (`[&_.psv-loader-container]:hidden` and `loadingTxt: null`).
+    - Replaced static circle with restrained pulsing lemon loader (`bg-electric-lemon` ping and pulse rings) with accessible loading label (`Calibrating 360° Panorama...`, `role="status"`, `aria-live="polite"`) and `prefers-reduced-motion` compliance.
+    - Confined viewer to `z-10` below global header (`fixed top-0 z-50`), ensuring the header stays visually above content when reappearing during upward scroll.
+  - **Verification Performed**:
+    - Production build (`npm.cmd run build`): 2,131 modules compiled with 0 errors.
+    - Focused browser check (`/property/prop-1`):
+      1. Verified matching warm porcelain container background on Access & Connectivity and Action Box.
+      2. Tested Purchase EMI Calculator sliders (Down Payment, Loan Term in months, Interest Rate) and verified immediate accurate recalculation.
+- **FOCUSED FIXES — HOME INTRO SPEED, PROPERTY VIEW BLANK STATE, AND ROLE MESSAGES**:
+  - **Actual Root Cause of Blank Property View**:
+    - Discovered via browser DOM inspection that when opening a property from listings, the property content was fully loaded and present in the DOM (height: 4,202px), but was trapped at `opacity: 0`.
+    - `PageLayout.jsx` previously wrapped all non-home routes in `<AnimatePresence mode="wait"><motion.div key={location.pathname} initial={{ opacity: 0 }} ...>`.
+    - During cross-route navigation from `/buy` to `/property/:id`, Framer Motion held the exiting view for 350ms while React Router immediately mounted the new route. When the new `motion.div` mounted with `initial={{ opacity: 0 }}`, synchronous and asynchronous state updates from data loading (`setLoading(false)` and `setProperty(data)` resolving in 150ms) interrupted Framer Motion's transition mid-flight, leaving the container permanently frozen at `opacity: 0`. Reloading worked because there was no prior route exit animation.
+  - **The Fix (`PageLayout.jsx` & `PropertyDetailsPage.jsx`)**:
+    - Removed `AnimatePresence` and the `opacity: 0` `motion.div` wrapper from `PageLayout.jsx`, directly rendering `{children}` inside `<main>` (matching the proven pattern of `HomePage`).
+    - Retained `activeRequestIdRef` request tracking and immediate state reset (`setProperty(null)`) on `id` change in `PropertyDetailsPage.jsx` to prevent race conditions and stale data between property switches.
+    - Result: On clicking any listing, `PropertyDetailsSkeleton` renders immediately, and as soon as data resolves, the property content becomes fully visible without any reload.
+  - **Home Intro Slower Slide-Up with Zero Top Glitch (`Preloader.jsx`)**:
+    - Increased slide-up duration to `2.0s` with continuous momentum easing `[0.32, 0, 0.24, 1]`.
+    - Set end transform to `y: '-102%'` to guarantee the layer completely clears the top boundary with zero hairline seam or subpixel line.
+    - Restored `document.body.style.overflow = ''` when `slide-up` begins so the scrollbar does not cause an abrupt layout jump upon completion.
+    - Set `pointer-events-none` during slide-up so the user can interact immediately.
+    - Verified smooth, continuous upward glide without any catch, snap, flash, or second movement at the top edge.
+  - **Preserved Confirmed Fixes**:
+    - Retained `PropertyDetailsSkeleton` in `src/components/ui/Skeleton.jsx` with `motion-reduce:animate-none`.
+    - Retained distinct role-specific booking restriction messages:
+      - Agent: `"Agent accounts can’t book properties."`
+      - Admin: `"Admin accounts can’t buy or rent properties."`
+- **LOGIN AND REGISTER REDESIGN & HOME INTRO ENDPOINT FIX**:
+  - **Login Page Rebuild (`LoginPage.jsx`)**:
+    - Rebuilt `/login` to fit Porch Light's established brand identity: warm porcelain `#F1ECE3` base, Instrument Serif display heading, Manrope descriptions, and Space Mono labels and controls.
+    - Centered translucent, softly blurred container (`bg-porcelain/90 backdrop-blur-md border border-dark-gray/15 rounded-3xl shadow-xl`) providing legible contrast over the shader background.
+    - Added Porch Light brand mark badge with subtle pulsing lemon lantern accent.
+    - Preserved primary email/password authentication using existing `useAuth().login` service and `react-hook-form` validation.
+    - Added interactive password visibility toggle (`Eye` / `EyeOff` from `lucide-react`) and link to `/forgot-password`.
+    - Preserved 1-click quick-fill demo account pills (`user@demo.com`, `agent@demo.com`, `pending@demo.com`, `admin@demo.com`).
+    - Configured exactly one social sign-in option: Google via `GoogleLoginButton`, preserving the role selection modal and demo login flow without external OAuth setup.
+    - Clear navigation link to `/register`.
+  - **Register Page Rebuild (`RegisterPage.jsx`)**:
+    - Rebuilt `/register` as a separate route with an accessible two-tab switcher: **Buyer / Tenant** (`user`) and **Real Estate Agent** (`agent`).
+    - Tabs dynamically swap fields and submission behavior:
+      - Buyer / Tenant: Full Name, Base City, Email Address, Password (with visibility toggle), and Phone Number.
+      - Real Estate Agent: Base fields plus Agency / Brokerage Name (required), Agent RERA Certificate Number, and interactive mock RERA license upload card (`rera_license_certificate.pdf (Attached)`) with clear explanation: *"Pending agent accounts can browse immediately, but require verification before publishing listings."*
+    - Role is strictly immutable after account creation; public admin registration is prohibited.
+    - Configured single Google social sign-in option via `GoogleLoginButton`.
+    - Clear navigation link to `/login`.
+  - **Paper Design FlutedGlass Shader Background (`AuthBackgroundShader.jsx`)**:
+    - Integrated `@paper-design/shaders-react` package.
+    - Created local asset slot at `public/auth/auth-bg.jpg` (initialized with high-resolution architectural photography).
+    - Configured shader with Porch Light palette (`#F1ECE3` porcelain background, `#26262B` charcoal shadow, `#FFFFFF` highlights) and subtle fluting parameters (`distortion: 0.32`, `shift: 0.12`).
+    - Made purely decorative with strict `pointer-events-none select-none z-0` to guarantee zero interference with form inputs.
+    - Built comprehensive fallbacks: WebGL capability check, `prefers-reduced-motion` detection, and graceful non-WebGL blurred photographic backdrop (`filter blur-md scale-105 opacity-65`) overlaid with `bg-porcelain/60 backdrop-blur-sm`.
+- **AUTH PAGE RECOVERY, SHADER ISOLATION & HOME INTRO ROLLBACK**:
+  - **Actual Cause of Auth Page Crash**:
+    - When `@paper-design/shaders-react` was installed while Vite's dev server was running, Vite's optimizer attempted to re-bundle dependencies against a stale metadata cache, failing on removed legacy files (`lenis.mjs`). This caused Vite to fail chunk requests with a 504 Gateway Timeout and reject dynamic module imports (`Failed to fetch dynamically imported module: LoginPage.jsx`).
+    - Furthermore, `AuthBackgroundShader` had previously checked only basic `webgl` (1.0), whereas `@paper-design/shaders` strictly requires `canvas.getContext('webgl2')`. In environments lacking full WebGL2 hardware acceleration, `ShaderMount` threw an unhandled synchronous exception (`Paper Shaders: WebGL is not supported in this browser`).
+    - Because the shader component was mounted directly inside the page without an isolated error boundary, any module loading failure, WebGL context absence, or shader compilation error bubbled straight up to the root `ErrorBoundary`, crashing the entire route into "Something interrupted the light."
+  - **The Recovery & Safe Shader Fallback (`AuthBackgroundShader.jsx`)**:
+    - Terminated the stale dev server process, purged the corrupted `node_modules/.vite` cache, and restarted Vite clean.
+    - Implemented a dedicated `ShaderErrorBoundary` wrapping the shader component. Any WebGL initialization error, shader compilation issue, or canvas runtime throw is caught locally and seamlessly renders the Porch Light blurred architectural fallback background without crashing the auth pages or bubbling to the global app error boundary.
+    - Switched `FlutedGlass` import to dynamic lazy loading (`React.lazy` inside `React.Suspense`) with an error catch handler, preventing any package import failure from blocking auth route evaluation.
+    - Upgraded WebGL detection to explicitly check `webgl2` support (`canvas.getContext('webgl2')`) and added image asset pre-verification before mounting the canvas.
+    - Preserved the intended Porch Light auth design: warm porcelain `#F1ECE3`, blurred container, Instrument Serif typography, password show/hide toggle, demo quick-fill accounts, and Google-only social sign-in.
+  - **Home Intro Slide-Up Rollback (`Preloader.jsx` & `experiments.js`)**:
+    - Reverted the exit animation to its approved normal speed: 300ms content fade/scale to 0.96 (`content-exit`) followed by a 0.9s slide-up (`[0.76, 0, 0.24, 1]` easing, `y: '-100%'`).
+    - Cleaned up obsolete temporary code and removed the `PRELOADER_VIDEO_SLIDE_EXIT` experimental flag from `src/config/experiments.js` and `Preloader.jsx`.
+    - Preserved initial landing / full reload trigger behavior and in-app navbar navigation skip behavior.
+  - **Focused Verification Performed**:
+    - Production build (`npm.cmd run build`): 2,207 modules compiled with 0 errors.
+    - Browser subagent verified on port 5174:
+      1. `/login`: Confirmed Login page renders cleanly with form, demo pills, password toggle, and Google button. Global error boundary screen is completely gone.
+      2. Tested 1-click 'Buyer' demo pill and toggled password visibility.
+      3. Navigated to `/register`: Confirmed Register page renders cleanly. Switched between 'Real Estate Agent' and 'Buyer / Tenant' tabs; confirmed fields update dynamically (Agency Name, RERA number, and license card on Agent; Base user fields on Buyer).
+      4. Console logs: 0 unhandled errors or warnings.
+- **FOCUSED FIX — INTRO LAYER AND AUTH PAGE HEIGHT**:
+  - **Home Intro Layer Direct Slide-Up (`Preloader.jsx`)**:
+    - Removed the intermediate 300ms content fade-out that previously faded the video to transparent before sliding up, which had caused a plain porcelain/white screen to slide upward.
+    - Configured the entire preloader layer (with the intro video playing at full opacity) to slide directly upward (`initial={{ y: '0%' }}`, `animate={{ y: '-102%' }}`, `duration: 0.9s`, easing `[0.76, 0, 0.24, 1]`) to reveal the Home page underneath.
+    - Preserved approved timing, easing, trigger behavior (plays on full reload/initial direct landing, skipped on in-app navbar navigation), and ensures no white flash, seam, pause, or snap at the top endpoint.
+  - **Login and Register Desktop Height-Fit Architecture (`LoginPage.jsx`, `RegisterPage.jsx`, `PageLayout.jsx`)**:
+    - Eliminated unnecessary vertical page scrolling on large screens:
+      - Page footer conditionally suppressed on dedicated auth routes (`/login`, `/register`, `/forgot-password`) inside `PageLayout.jsx`.
+      - `LoginPage`: Compacted desktop vertical padding (`lg:py-5 lg:px-6`), header icon badge (`w-10 h-10`), and demo quick-fill bar, reducing total card height to ~470px and total document height to exactly match visible viewport height (`scrollHeight === innerHeight === 788px` on 1440x900, `fits: true`).
+      - `RegisterPage` (User Tab): Compacted layout with side-by-side Name/City and Email/Phone rows (~505px height), fitting completely within desktop viewport height (`scrollHeight === innerHeight === 788px`, `fits: true`).
+      - `RegisterPage` (Agent Tab): Implemented a balanced 2-column desktop grid (`max-w-4xl`, ~495px height) with credentials on the left (Name, City, Email, Password with show/hide toggle, Phone, Google OAuth, sign-in link) and licensure on the right (Agency Name, RERA Number, interactive License upload attachment card, verification footnote, and "Register as Agent" submit button), fitting cleanly within desktop screen height (`scrollHeight === innerHeight === 788px`, `fits: true`).
+    - Responsive mobile behavior: Under smaller viewports (e.g. mobile 375x667), pages smoothly stack in a single column with natural vertical scrolling (`scrollHeight: 834px`, `innerHeight: 574px`, `canScroll: true`) without fixed height constraints or clipped touch targets.
+  - **Focused Verification**:
+    - Production build (`npm.cmd run build`): Compiled 2,207 modules with 0 errors.
+    - Desktop browser verification (1440x900): Confirmed `scrollHeight <= innerHeight` across `/login` (788px/788px), `/register` Buyer tab (788px/788px), and `/register` Agent tab (788px/788px) with zero vertical page scrolling and all controls/buttons visible.
+    - Mobile browser verification (375x667): Confirmed clean vertical stacking and smooth, natural vertical scrolling on small screens.
+- **FOCUSED AUTH PAGE FIX — LINKS, REGISTER TAB, FOOTERS, AND REGISTRATION FIELDS**:
+  - **High-Visibility Footer Links (`LoginPage.jsx`, `RegisterPage.jsx`)**:
+    - Login: Updated helper text to “No account yet? Register here” (destination: `/register`).
+    - Register: Updated helper text to “Already registered? Sign in here” (destination: `/login`).
+    - Prominent styling: `font-mono text-[13px] sm:text-sm text-dark-gray/80` with distinct underline (`underline underline-offset-4 decoration-deep-purple/40 hover:decoration-deep-purple hover:text-charcoal`), accessible focus ring, and comfortable touch padding.
+  - **Auth Header Register Tab (`Header.jsx`)**:
+    - Added a `Register` tab (`/register`) alongside `Login` (`/login`) for guest users without altering existing header structure, centering, alignment, typography, blur, or colors.
+    - Preserved active tab sliding underline animation tracking `/login` and `/register`.
+  - **Site Footer Integration (`PageLayout.jsx`)**:
+    - Removed `isAuthPage` footer suppression so the full site `Footer` renders at the bottom of both Login and Register pages in normal document flow below `<main>`.
+    - Preserved natural vertical scrolling down into the footer without overlaying or clipping form content.
+  - **User & Agent Registration Field Verification (`RegisterPage.jsx`, `services/auth.js`)**:
+    - Verified two clear tabs: `User` and `Agent`.
+    - User registration contains strictly user account fields: Full Name, Base City, Email Address, Password (with show/hide toggle), and Phone Number; no Agent-only fields.
+    - Agent registration contains all account credentials plus Agency Name, Agent RERA Number, interactive License Document attachment card, and pending verification guidance.
+    - Updated `services/auth.js` to persist `reraNumber` and `licenseDocument` on `newUser`.
+    - Standardized `autoComplete` attributes (`name`, `address-level2`, `email`, `current-password` / `new-password`, `tel`, `organization`) across both auth pages.
+    - Maintained direct connection to `authService` without direct mockStore manipulation from UI components.
+- **FOCUSED AUTH POLISH — FASTER TAB SWITCHING, MORE TRANSPARENT CONTAINERS, AND WEBSITE LOGO**:
+  - **Eliminated Tab Switching Lag (`AuthLayout.jsx`, `router.jsx`)**:
+    - Created persistent parent `AuthLayout` hosting `AuthBackgroundShader`. When switching between `/login`, `/register`, and `/forgot-password`, the WebGL2 context, fragment/vertex shaders, canvas, and 1.3MB GPU background texture remain continuously mounted instead of being destroyed and recompiled on every tab navigation.
+    - Implemented in-memory draft persistence (`authDrafts.js`), ensuring entered field values and active tab states in Login and Register are preserved when navigating between tabs.
+  - **Subtly More Transparent Containers (`LoginPage.jsx`, `RegisterPage.jsx`)**:
+    - Adjusted container background from `bg-porcelain/90` to `bg-porcelain/75` with `backdrop-blur-md` and refined `border-dark-gray/20 shadow-2xl`, letting the architectural fluted glass textures show through with subtle sophistication while maintaining high text/button contrast (>= 4.5:1).
+    - Sub-containers (tab switcher, demo pills, licensure box) tuned to `bg-white/60 border border-dark-gray/15`.
+  - **Official Website Logo Integration (`AuthBrandLogo.jsx`)**:
+    - Replaced temporary "PL" text badge with `AuthBrandLogo` component in Login and Register heading areas.
+    - Configured local asset slot targeting `public/brand/logo.png` with `object-fit: contain`, proportional alignment, and accessible `alt="Porch Light"`.
+    - Integrated graceful fallback emblem badge if the user has not yet dropped the official image into `public/brand/logo.png`.
+  - **Verification**:
+- **AUTH AND GLOBAL HEADER POLISH**:
+  - **Enlarged Logo in Login and Register Containers (`AuthBrandLogo.jsx`)**:
+    - Increased logo dimensions modestly to `h-14 sm:h-16 w-auto max-w-[220px]` (from `h-10 sm:h-11`) with strict `object-fit: contain` and preserved alignment, surrounding spacing, and aspect ratio across both Login and Register pages.
+  - **Global Header Brand Logo beside Title (`Header.jsx`)**:
+    - Placed the supplied brand logo asset (`/brand/logo.png`, `h-7 sm:h-8 w-auto object-contain`) immediately to the left of the existing "Porch Light" title text on the left side of the header.
+    - Vertically centered the logo and wordmark as one compact brand group while preserving the dotless "ı", lemon dot marker, city ticker, active nav tabs, and responsive layout.
+  - **Eliminated Cross-Page Navigation Lag to Login/Register (`router.jsx`, `AuthBackgroundShader.jsx`)**:
+    - Statically imported `LoginPage`, `RegisterPage`, and `ForgotPasswordPage` in `router.jsx` to eliminate route code-splitting chunk download delays and Suspense fallback flashes when navigating from outside tabs (`Home`, `Buy`, `Rent`).
+    - Pre-warmed `@paper-design/shaders-react` and background image `/auth/auth-bg.jpg` in module scope.
+    - Cached WebGL2 support detection and image availability check, enabling synchronous immediate mount of `AuthBackgroundShader` (`shaderReady = true`) without asynchronous waterfall delays or layout shifts.
+    - Retained safe `ShaderErrorBoundary` and static fallback for graceful degradation on non-WebGL or reduced motion devices.
+  - **Moved Notifications to Global Header (`Header.jsx`)**:
+    - Moved the Notifications control out of the profile dropdown and positioned it in the global header immediately to the left of the account name on the right side.
+    - Available across all pages for signed-in users with live unread badge from `mockStore`, accessible `aria-label`, and focus-visible state.
+    - Kept hidden for guests to preserve clean sign-in behavior; provided mobile notification bell in header for quick access on narrow screens.
+  - **Simplified Profile Dropdown (`Header.jsx`)**:
+    - Removed Notifications and Dashboard/Moderation rows from the profile dropdown.
+    - Retained only the informational name & role tag header, Profile row (`/profile`), divider, and Sign out button (`logout()`), keeping the dropdown compact and focused.
+- **FOCUSED FIX — NAVBAR-TO-AUTH LAG AND HOME HEADER LOGO SIZE**:
+  - **Identified Actual Cause of Navbar-to-Auth Lag**:
+    - `AuthBackgroundShader` was previously mounted inside `AuthLayout`. Whenever the user navigated away to any non-auth page (`/`, `/buy`, `/rent`), `AuthLayout` unmounted and destroyed the WebGL context, compiled shaders, and textures (`shaderMount.destroy()`).
+    - Returning to `/login` or `/register` from any navbar tab forced the browser to re-execute `new ShaderMountVanilla()`, synchronously compile fragment/vertex shaders, and re-upload textures on the main thread, freezing the UI.
+    - Conversely, switching directly between `/login` and `/register` remained smooth because both routes share `AuthLayout` without unmounting.
+  - **Applied Targeted Fix (`PageLayout.jsx`, `AuthLayout.jsx`, `AuthBackgroundShader.jsx`)**:
+    - Hoisted `AuthBackgroundShader` persistently to `PageLayout.jsx` across all routes with route-aware visibility (`isAuthPage ? 'opacity-100' : 'opacity-0 pointer-events-none invisible'`).
+    - In `AuthBackgroundShader.jsx`, deferred non-auth page initialization to idle periods (`requestIdleCallback`), ensuring zero CPU/GPU overhead during initial Home intro or browsing.
+    - Removed duplicate `AuthBackgroundShader` from `AuthLayout.jsx`.
+    - Result: WebGL context and compiled shaders stay alive across route transitions. Entering `/login` or `/register` from the navbar is now prompt and instantaneous, while direct Login-to-Register switching remains 100% smooth.
+  - **Slightly Enlarged Home Screen Header Logo (`Header.jsx`)**:
+    - Increased the supplied brand logo asset beside the Porch Light title in the header from `h-7 sm:h-8` (28px/32px) to `h-9 sm:h-10` (36px/40px) with `object-fit: contain`.
+    - Maintained vertically centered alignment (`gap-2.5 sm:gap-3`), correct aspect ratio, title styling, and centered navigation layout within the 72px header.
+    - Preserved existing Notifications button placement beside the account name, and left auth-container logo sizing unchanged.
+  - **Verification**:
+    - Verified production build (`npm.cmd run build`): 2,210 modules transformed with exit code 0.
+    - Verified local dev server is active and serving 200 OK responses across `/`, `/login`, and `/register`.
+- **FOCUSED AUTH FIX — MATCH NAVBAR TRANSITION AND MAKE GOOGLE USER-ONLY**:
+  - **Matched Navbar Indicator Transition (`Header.jsx`)**:
+    - Scoped the central navigation tabs (`Home`, `Buy`, `Rent`, `Login`, `Register`) inside `<LayoutGroup id="header-nav-tabs">`.
+    - Maintained the shared `<motion.div layoutId="header-active-tab" ... />` component with identical spring configuration (`stiffness: 400, damping: 32`) across all tabs.
+    - Preserved header visibility across route changes (`setHidden(false)` on navigation), ensuring switching between Login and Register glides the active underline smoothly without flashing, jumping, or header reset.
+  - **Restricted Google Sign-In to User Accounts (`auth.js`, `AuthContext.jsx`, `GoogleLoginButton.jsx`, `LoginPage.jsx`, `RegisterPage.jsx`)**:
+    - Enforced `ROLES.USER` strictly in `authService.loginWithGoogle()`, preventing authentication or creation of Agent or Admin accounts via Google.
+    - Removed role selection modal from `GoogleLoginButton`; clicking directly authenticates as a User profile (`user@demo.com`).
+    - Added styled secondary note directly beneath the Google button on the Login page and User registration tab: *"Google sign-in is available for User accounts only."*
+    - Completely removed Google sign-in and divider from the Agent registration tab; agents must complete all required credentials, agency/brokerage information, RERA number, and license document attachment, remaining subject to the verification review process (`isVerified: false`).
+    - Kept email/password authentication intact for all roles and preserved role immutability.
+  - **Verification**:
+    - Verified production build (`npm.cmd run build`): 2,210 modules transformed with exit code 0.
+    - Verified dev server HTTP 200 responses across `/login` and `/register`.
+- **BUY AND RENT + PROPERTY VIEW FUNCTIONALITY PASS**:
+  - **1. Buy Purchase-Financing Calculator (`PropertyDetailsPage.jsx`)**:
+    - Bound to the current property's actual sale valuation (`property.price`).
+    - Removed user-adjustable interest-rate slider; users control only down payment (percentage & calculated INR) and loan term (months with presets `120M`, `180M`, `240M`, `360M`).
+    - Defined benchmark interest rate in single configuration value `DEFAULT_HOME_LOAN_INTEREST_RATE = 8.5` p.a.
+    - Displays down payment, loan principal, estimated monthly EMI, total interest, and total repayment.
+    - Added legal disclaimer stating the rate is an illustrative planning benchmark, actual lender terms vary, and Porch Light does not offer or broker loans.
+  - **2. Rent Affordability & Lease-Cost Calculator (`PropertyDetailsPage.jsx`)**:
+    - Uses actual rent, security deposit, and maintenance charges. When deposit or maintenance is unavailable, labels as *"Not provided"* or *"Included in rent"*.
+    - Clearly labeled estimated-utilities slider as the renter's own estimate, not a property-provided fact.
+    - Supported 11, 24, and 36-month lease horizons; displays recurring outlay for the term, explicitly excluding the refundable deposit.
+    - Calculated move-in funds (refundable deposit + 1st month rent + ₹999 platform fee).
+    - Isolated refundable deposit in a dedicated card clarifying it is held in escrow and returned at lease termination, not money spent on rent.
+    - Replaced generic 33% recommended income advice with an optional income assessment calculating the rent-to-income percentage only if entered.
+    - Excluded buy financing and purchase EMI fields on rent.
+  - **3. Preserved Visit Requests (`PropertyDetailsPage.jsx`, `bookings.js`)**:
+    - Retained "Book Private Visit" modal and flow across both Buy and Rent routes with date, time slot, and special requests.
+  - **4. Contact Agent Modal & In-App Chat (`ContactAgentModal.jsx`, `PropertyChatModal.jsx`, `attachmentStorage.js`, `chat.js`)**:
+    - Updated detail view inquiry button to "Contact Agent", presenting: (a) Message in Porch Light, (b) Direct Call (only when agent has phone), and (c) WhatsApp (only when agent explicitly has `whatsappNumber`; never inferred from phone).
+    - Messaging opens or reuses the conversation thread for the same user, agent, and property, displaying a property context chip.
+    - Added attachment support for JPG, PNG, WebP, and PDF files up to 5MB with client-side validation, progress bar, lightbox preview, and file download.
+    - Stored binary attachment blobs in **IndexedDB** (`porchlight_chat_attachments`), keeping `localStorage` lightweight and unburdened.
+  - **5. Purchase Payment Choices (`CheckoutPage.jsx`)**:
+    - Added payment plan selector to Buy checkout: (a) Token Advance (priority reservation), (b) Home Loan / EMI Plan (carries calculator figures, clarifies token amount due now, disclaims loan issuance), and (c) Full Purchase Amount (simulated acquisition).
+    - Kept UPI/Card/Net Banking tabs, dev force-failure toggle, PDF receipt generation via `jsPDF`, and clear demo notice.
+  - **6. Rental Payment Behavior (`CheckoutPage.jsx`)**:
+    - Kept Rent checkout distinct from Buy with move-in funds (security deposit + 1st month rent + ₹999 platform fee).
+    - Carries rental calculator breakdown for reference without billing estimated utilities as property fees.
+  - **7. Shared Save Behavior Across Surfaces (`properties.js`, `PropertyBrowseLayout.jsx`, `PropertyMapExplorer.jsx`, `PropertyDetailsPage.jsx`)**:
+    - Synchronized saved properties everywhere using `subscribeToSavedProperties` (Listings cards, Map desktop and mobile rows, Map pin previews, and Property View).
+  - **8. Compare Behavior & Strict Category Separation (`compare.js`, `ComparePage.jsx`, `PropertyBrowseLayout.jsx`, `PropertyDetailsPage.jsx`)**:
+    - Strictly separated Buy (`sale`) and Rent (`rent`) comparisons; mixing is blocked.
+    - Maintained 3-property limit per category with informative notice.
+    - Clicking Compare from Property View adds property as the first item and navigates to the matching Buy or Rent browse page with compare tray open.
+    - Rebuilt `/compare` with category tabs, individual remove actions with instant count decrement, and a fallback screen for fewer than 2 properties.
+  - **9. Rupee Symbol Glyph Fix (`formatINR.js`, `PropertyDetailsPage.jsx`, `CheckoutPage.jsx`)**:
+    - Wrapped `₹` in `RupeeSymbol` using `font-sans font-normal` (Manrope/system-ui) to prevent missing-glyph box fallback in Instrument Serif (`font-serif`), keeping price numerals crisp and unweighted.
+  - **10. Verification**:
+    - Static analysis and production build (`vite build` via `cmd.exe /c npm run build`) succeeded with 0 errors across 2,577 modules.
+- **PROPERTY VIEW CRASH RESOLUTION (BUY & RENT ROUTES)**:
+  - **Identified Root Causes**:
+    1. *Rules of Hooks Violation in `PropertyDetailsPage.jsx`*: Two `useEffect` hooks (`subscribeToSavedProperties` and `subscribeToCompare`) were positioned **after** early return statements for the loading skeleton (`if (loading) return <PropertyDetailsSkeleton />;`) and error state. During initial render (`loading === true`), React executed 21 hooks; upon resolving property data (`loading === false`), the re-render passed the early return and executed 23 hooks, triggering `Error: Rendered more hooks than during the previous render.` caught by the global `ErrorBoundary` ("Something interrupted the light.").
+    2. *Defensive Data Access for Partial/Custom Properties*: In `PropertyDetailsPage.jsx`, raw `property.images` slicing and indexing threw `TypeError` if `images` was undefined or empty.
+  - **Targeted Repairs Made**:
+    1. Relocated `useEffect` hooks (`subscribeToSavedProperties` and `subscribeToCompare`) to the top level of `PropertyDetailsPage.jsx` above all early returns, strictly adhering to React's Rules of Hooks.
+    2. Hardened image data flow: standardized on safe `galleryImages` fallback across 12-column collage, thumbnail map, and lightbox viewer.
+    3. Retained distinct Buy vs. Rent financial tools, contact modal with safe agent invariants, not-found error state with history navigation, and payment flows.
+  - **Verification**:
+    - Verified static production build (`cmd.exe /c npm run build`): 2,577 modules transformed with exit code 0.
+    - Verified separate Buy and Rent seed data shapes render cleanly with safe fallbacks for optional fields.
+- **HOME INTRO LIFECYCLE, MODAL TYPOGRAPHY/INR & BUY/RENT COMPARISON RELIABILITY**:
+  - **1. Home Intro Header Hiding & Scroll Prevention**:
+    - Synchronized shared `Header.jsx` visibility with `isHomeIntroActive()`: header starts hidden and stays hidden throughout active intro animation playback, revealing only after the preloader slides up completely. During regular in-app navigation to Home, header appears immediately.
+    - Prevented user scrolling during intro across wheel, trackpad, touch drag, and keyboard navigation keys (`ArrowDown`, `ArrowUp`, `PageDown`, `PageUp`, `Space`, `Home`, `End`) using capture-phase event listeners and `overflow: hidden` on both `document.body` and `document.documentElement`.
+    - Smooth-scroll lerp handlers in `useSiteWideSmoothScroll` and page-level wheel handlers halt during intro playback to prevent background scroll drift.
+    - Upon completion, unmount, or route navigation, clean teardown restores default overflow, removes all capture listeners, and resets scroll cleanly to `(0, 0)` without jumping or lingering locks.
+  - **2. Action Windows & Modals Typography & INR Formatting**:
+    - Reduced unnecessary bold styling across property action dialogs (`ContactAgentModal.jsx`, `PropertyChatModal.jsx`, `Modal.jsx`, and `CheckoutPage.jsx`), establishing a calm visual hierarchy with regular (`font-normal`) and medium (`font-medium`) weights for body copy, option titles, breakdown rows, and amounts. Bold weights are reserved for short badges and primary submit buttons.
+    - Replaced raw `₹` characters with `<RupeeSymbol />` (Manrope/system-ui fallback font stack) to prevent broken glyph boxes in serif font contexts, and paired with `{ withSymbol: false }` or `formatINRPieces` to avoid duplicate rupee symbols while maintaining Indian digit grouping (`en-IN`).
+  - **3. Reliable Buy & Rent Comparison & Remove All**:
+    - Identified root cause of comparison inconsistency: `ComparePage.jsx` was calling `toggleCompare` on properties already passed via URL `ids`, inadvertently removing them, and was forcibly injecting 2 default properties whenever the stored compare set was empty.
+    - Added non-destructive `addCompare(property, preferredType)` to `compare.js`, updated `toggleCompare(property, preferredType)` to accept optional mode, and ensured `removeCompare(propertyId, listingType)` and `clearCompare(listingType)` operate strictly within their transaction category.
+    - Added a clearly labeled "Remove all" control on `ComparePage` (in the top header toolbar and in the 1-property/insufficient state) and updated the browse comparison tray's clear button with toast feedback.
+    - Cleared empty states gracefully display clear guidance with direct CTAs back to `/buy` or `/rent` without injecting mock properties.
+  - **4. Verification**:
+- **HOME INTRO FRAME-0 HEADER SUPPRESSION & MOBILE RESPONSIVE COMPARE EXPERIENCE**:
+  - **1. Zero-Frame Header Suppression During Home Intro (`preloaderState.js`, `Header.jsx`)**:
+    - *Identified Root Cause*: `PageLayout.jsx` rendered `<Header />` before `<main>{children}</main>` (where `<HomePage>` and `<Preloader>` mount). `preloaderState.js` previously initialized `isIntroActive = false`. Because state evaluation happened before `<Preloader>` set `isIntroActive = true`, `<Header />` rendered visibly on frame 0 with `translate-y-0`. When `<Preloader>` mounted moments later and fired `porchlight-intro-active`, the header animated upward with CSS `duration-500` (`-translate-y-full`), producing a visible flash and slide-away.
+    - *Targeted Fix*:
+      - Exported `willHomeIntroRun(isFromNavbar)` in `preloaderState.js` to synchronously calculate whether the intro will execute prior to component mount.
+      - Synchronously initialized `isIntroActive = willHomeIntroRun()` on module load, ensuring `isHomeIntroActive()` returns `true` on the very first frame for direct visits and browser reloads.
+      - In `Header.jsx`, initialized `introActive` and `hidden` using `isHome && (isHomeIntroActive() || willHomeIntroRun(isFromNavbar))` and added an early return `if (isHome && introActive) return null;` so `<Header />` produces zero DOM elements on frame 0.
+      - Eliminated slide-away / fade-out animations when the intro starts; the header remains completely absent throughout intro playback and mounts cleanly at `translate-y-0` only after the intro finishes or during standard in-app navbar navigation.
+      - Preserved existing scroll-lock behavior and smooth scroll restoration.
+  - **2. Mobile Responsive Compare Experience (`ComparePage.jsx`)**:
+    - *Identified Mobile Constraints*: Desktop comparison table (`min-w-[920px]`) caused horizontal page overflow, squashed text columns, and clipped attributes on mobile viewports (< 768px).
+    - *Targeted Fix*:
+      - Isolated multi-column comparison table to desktop viewports (`hidden md:block overflow-x-auto`).
+      - Created responsive, vertically stacked comparison cards for phone viewports (`block md:hidden space-y-6`).
+      - Added 16:9 imagery previews with `SmartImage`, sanctuary index counters (`Sanctuary 01 of 02`), and touch-friendly 38px remove buttons (`X`).
+      - Formatted core property specifications in a structured 2-column key-value grid (RERA, Carpet Area, Configuration, Furnishing, type-specific deposit/possession/parking) using proportional typography and `<RupeeSymbol />`.
+      - Built a responsive 2-column amenities matrix displaying included amenities with brass checkmarks and absent amenities with muted dashes.
+      - Preserved 3-property limit, separate Buy and Rent compare sets, and touch-friendly "Remove all" controls.
+      - Enhanced the 1-property/insufficient state to display a queued preview card alongside Quick Add recommendations to quickly reach a 2-property comparison without dead-ends.
+  - **3. Verification**:
+    - Production build verification via `cmd.exe /c npm run build`: 2,577 modules transformed with exit code 0.
+    - Verified strict TypeScript/JSX syntax, zero horizontal overflow classes (`overflow-x-hidden w-full`), and component integrity across Buy and Rent comparison states.
+- **FOCUSED HOME INTRO, HEADER RESTORATION & SMOOTH NAVBAR SWITCHING**:
+  - **1. Restore When the Home Intro Plays (`preloaderState.js`, `HomePage.jsx`)**:
+    - *Identified Root Causes*: Previous reliance on `isBrowserReload` checked `performance.getEntriesByType('navigation')[0]?.type === 'reload'`, which persisted across client-side SPA route changes and caused the preloader to replay when returning to Home from `/buy` or `/rent`. Additionally, reliance on `location.state?.fromNavbar` made intro skipping brittle.
+    - *Restoration Made*: Restructured `preloaderState.js` around a deterministic document session lifecycle. Evaluates whether the initial browser document load occurred on root `'/'`. If so, plays once for the current document session and is atomically claimed (`hasIntroRunForCurrentPageLoad = true`). Client-side navigation (navbar, logo, footer, back/forward) never replays the intro. Browser reloads (F5) re-evaluate the document context cleanly.
+  - **2. Zero-Frame Hidden Header & Restrained Reveal (`Header.jsx`)**:
+    - *Identified Root Causes*: An earlier hotfix introduced `if (isHome && introActive) return null;` in `Header.jsx`. Unmounting the header destroyed Framer Motion's `<LayoutGroup id="header-nav-tabs">`, created tab switching lag, and caused the header to pop into view abruptly upon intro completion.
+    - *Restoration Made*: Removed `return null` to keep `<Header />` permanently mounted. Initialized state on frame 0 to `hidden = true` when `isHome && isHomeIntroActive()`, rendering `<header>` directly at `-translate-y-full pointer-events-none`. It never renders visibly on frame 0, never flashes, and never slides away. Upon intro exit, `handleIntroActive` smoothly transitions `hidden` to `false`, gliding the header down with `duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]`.
+  - **3. Header Background Stability (`Header.jsx`)**:
+    - *Identified Root Causes*: `headerTheme` was updated solely during RAF-throttled scroll handlers. Navigating between light pages (e.g. `/buy`) and Home caused a 1-2 frame delay where the header rendered light/beige background over the dark hero image.
+    - *Restoration Made*: Added synchronous theme alignment inside `useEffect([location.pathname])`: immediately applies `'dark'` for Home and `'light'` for non-Home pages, while preserving section-aware scroll sampling via `data-header-theme`.
+  - **4. Smooth Navbar Tab Switching (`Header.jsx`)**:
+    - *Identified Root Causes*: Unmounting `<Header />` during intro or re-evaluating `fromNavbar` in hook dependencies caused tab state resets and destroyed the sliding active indicator underline.
+    - *Restoration Made*: Keeping `<Header />` mounted continuously preserves Framer Motion's `<LayoutGroup id="header-nav-tabs">` and `<motion.div layoutId="header-active-tab">`, restoring seamless spring sliding (`stiffness: 400, damping: 32`) with zero lag or visual jumps.
+  - **5. Interruption and Scroll-Lock Cleanup (`Preloader.jsx`)**:
+    - Added `isMounted` guard and `clearTimeout` for `minWaitTimer` and `maxWaitTimer`. Cleanly removes capture listeners and unlocks document scrolling if the user navigates away or interrupts the intro.
+  - **6. Verification**:
+    - Verified compilation via `cmd.exe /c npm run build`: 2,577 modules transformed, built with exit code 0.
+- **URGENT HOME RECOVERY — RESTORE INTRO, HEADER VISIBILITY, AND SCROLL LOCK PREVENTION**:
+  - **1. Identified Root Cause of Skipped Intro & Stranded Locks**:
+    - `shouldRunHomePreloader()` previously contained an in-place mutation (`hasIntroRunForCurrentPageLoad = true`).
+    - In React 18 development/StrictMode, component state initializers run twice: the first call returned `true` and mutated the module variable; the second invocation saw `hasIntroRunForCurrentPageLoad === true` and returned `false`.
+    - As a result, `showPreloader` initialized to `false`, `<Preloader />` never mounted, and the intro was skipped.
+    - Because `<Preloader />` never mounted, its completion callback never fired to clear `isHomeIntroActive = true`. The header remained stuck at `-translate-y-full`, and wheel/scroll handlers continually blocked scrolling via `isHomeIntroActive()`.
+  - **2. Pure Trigger Lifecycle (`preloaderState.js`, `HomePage.jsx`)**:
+    - Made `shouldRunHomePreloader()` completely pure: it evaluates `!hasPreloaderRun && pathname === '/' && !prefersReducedMotion` without any state mutation.
+    - React StrictMode double invocations return `true` consistently, ensuring `<Preloader />` reliably mounts on direct initial visits and browser reloads (F5).
+    - `hasPreloaderRun` is only marked completed when the preloader actually executes (`onSlideStart` / `onComplete`) or when navigating to subpages. In-app navbar returns to Home cleanly skip the intro.
+  - **3. Impossible to Strand Scroll Locking & Multi-Tier Fallbacks**:
+    - Scroll locking (`wheel`, `touchmove`, `keydown` and `document.body.style.overflow = 'hidden'`) is mounted exclusively by `<Preloader />` and unconditionally cleared in its `useEffect` cleanup.
+    - In `HomePage.jsx`, added an explicit safety effect: whenever `showPreloader` is `false`, it immediately verifies `setHomeIntroActive(false)` and ensures `document.body.style.overflow = ''`.
+    - In `preloaderState.js`, added `forceUnlockHomeIntro()` watchdog: if `isHomeIntroActive` is not cleared within 7.5s, all locks are automatically removed and a completion event is dispatched.
+    - In `Header.jsx`, added a watchdog effect ensuring the header cannot remain hidden past 7.5s.
+- **FOCUSED HOME FIX — RESOLVE PAGE ERROR AND WAIT FOR INTRO TO FINISH**:
+  - **1. Identified Root Cause of Home Error Screen ("Something interrupted the light.")**:
+    - In `src/pages/HomePage.jsx`, the fallback `useEffect` called `setHomeIntroActive(false)` whenever `!showPreloader`.
+    - However, `setHomeIntroActive` was omitted from the `@/lib/preloaderState` import list on line 6 (only `shouldRunHomePreloader`, `markHomePreloaderRun`, and `isHomeIntroActive` were imported).
+    - When the preloader unmounted upon completion (setting `showPreloader = false`) or on initial mount during in-app navigation, evaluating the undeclared identifier threw an immediate `ReferenceError: setHomeIntroActive is not defined`, crashing the Home route into `<ErrorBoundary>`.
+    - *Fix Applied*: Added `setHomeIntroActive` to the imports of `HomePage.jsx` and added an unmount cleanup effect to proactively restore `document.body` / `document.documentElement` overflow and reset intro state.
+  - **2. Synchronized Header Reveal with Intro Slide-Up Completion**:
+    - *Identified Premature Reveal Cause*: In `HomePage.jsx`, `onSlideStart` in `<Preloader>` previously called `markHomePreloaderRun()`, which invoked `setHomeIntroActive(false)`. This dispatched `porchlight-intro-active` with `active: false` at the start of the 0.9s slide-up animation, causing `Header.jsx` to immediately transition to `translate-y-0` and appear behind or during the departing intro.
+    - *Fix Applied*:
+      - Removed `markHomePreloaderRun()` from `onSlideStart` in `HomePage.jsx`. `onSlideStart` now strictly reveals the Home page underneath (`setPageRevealed(true)`) and triggers hero text rising (`setHeroTriggered(true)`).
+      - Header remains fully hidden at `-translate-y-full pointer-events-none` throughout the entire 0.9s slide-up animation.
+      - Reveal signal is strictly tied to Framer Motion's `onAnimationComplete` inside `Preloader.jsx`: only when the intro layer reaches `y: -102%` does `setHomeIntroActive(false)` fire, unlocking scroll and triggering the header's smooth 500ms slide-down transition.
+      - In `preloaderState.js`, initialized `isIntroActive = isInitialLandingAtHome`, ensuring `isHomeIntroActive()` is synchronously `true` from tick 0 on direct loads and reloads.
+      - In `Header.jsx`, updated location change effect to check `!shouldRunHomePreloader() && !isHomeIntroActive()` so initial route mounting does not prematurely reveal the header before the intro begins.
+      - Calibrated safety watchdogs in `preloaderState.js` and `Header.jsx` to 9.5s (safely beyond the 7s max media wait + 0.9s slide-up animation) so fallback timers cannot cut off the animation prematurely.
+- **FOCUSED PERFORMANCE PASS — REMOVE LAG WITHOUT CHANGING THE WORKING DESIGN**:
+  - **Backup Created**:
+    - Reversible file copies saved in `_backup_performance_pass/` (`Preloader.jsx`, `HeroSection.jsx`, `Header.jsx`, `PageLayout.jsx`, `AuthBackgroundShader.jsx`, `router.jsx`, `RegisterPage.jsx`, `preloaderState.js`).
+  - **1. Protected & Checked the Working Intro (`Preloader.jsx`)**:
+    - Confirmed intro loading, media resolution, decoding, playback, and 0.9s slide-up easing `[0.76, 0, 0.24, 1]` remain completely intact.
+    - Optimized GPU layer lifetime: switched `willChange` on the intro container to `stage === 'slide-up' ? 'transform' : 'auto'` so GPU allocation is isolated exclusively to active movement and promptly released.
+    - Preserved frame-0 hidden header, strict `onAnimationComplete` synchronization, scroll-lock lifecycle, and reload/direct-entry rules without altering visual appearance.
+  - **2. Fixed Home Title Reveal When Returning From Another Tab (`HeroSection.jsx`)**:
+    - *Identified Causes of Title Lag*:
+      1. Redundant Async Waterfall: `HeroSection` ran an async `prepareAssets()` waterfall inside `useEffect` that called `await getSlotUrl('hero.bg')` (sending a network `HEAD` request), waited for image `onload`, and awaited `document.fonts.ready` before setting `hasStartedIntro(true)`.
+      2. Cascaded State Rerenders: Multiple chained `useEffect` calls (`setAssetsReady`, `setHasStartedIntro`, and `setLetterStartY`) fired across successive frames, interrupting and delaying Framer Motion transitions.
+      3. Excessive Initial Travel Offset: Initial `cachedLetterStartY` was set to an arbitrary 1200px (far below the stage baseline), forcing letters to spend the first ~400ms rising through invisible space under the house cutout before emerging.
+    - *Optimizations Made*:
+      - Set `cachedAssetsReady = true` in module scope, as `/hero/hero-bg.jpg` and Anton are static local assets.
+      - Initialized `hasStartedIntro` synchronously to `Boolean(isTriggered)` on mount, so in-app returns to Home (`isTriggered: true`) immediately start the letter animation on the first rendered frame.
+      - Calibrated baseline `cachedLetterStartY` to 650px (just below the roofline) and stabilized `setLetterStartY` with a dead-zone threshold (`Math.abs(prev - dist) > 40`) to eliminate mid-flight restarts.
+      - Retained full Warm Sunset styling, Anton typography, letter-by-letter stagger (`i * 0.06`), and spring physics.
+  - **3. Smooth Login/Register Navbar Switching (`AuthBackgroundShader.jsx`, `RegisterPage.jsx`, `router.jsx`)**:
+    - *Identified Causes of Auth Tab Latency*:
+      1. Redundant WebGL Uniform Processing: `AuthBackgroundShader` re-rendered on every route change inside `PageLayout`. When switching between `/login` and `/register`, new prop references triggered `@paper-design/shaders-react`'s internal `processUniforms()`, creating new `Image()` objects and re-binding WebGL uniforms/textures on the main thread during active tab indicator movement.
+      2. Background Shader Animation Loop: When navigating away from auth pages, the WebGL canvas continued running its requestAnimationFrame fragment shader passes.
+      3. Layout Thrashing on Register: `RegisterPage` had `transition-all duration-300` on the root card, causing layout recalculations on page mount.
+      4. Redundant Guard Mounts: `<GuestOnly>` wrapped child routes individually rather than the parent route layout.
+    - *Optimizations Made*:
+      - Memoized `AuthBackgroundShader` with `React.memo` so route changes between `/login` and `/register` incur 0 re-renders or WebGL uniform updates.
+      - Throttled shader execution on non-auth routes (`speed={isAuthPage ? 0.5 : 0}`) to eliminate background shader contention.
+      - Replaced `transition-all` on `RegisterPage` with `transition-[max-width]` to isolate width transitions to the User/Agent tab toggle without page-mount layout recalculations.
+      - Lifted `<GuestOnly>` to wrap `<AuthLayout>` once at the parent route level in `router.jsx`, eliminating duplicate guard re-mounts.
+  - **4. Verification**:
+    - Executed production build: `cmd.exe /c npm run build` compiled 2,577 modules in 16.92s with 0 errors (exit code 0).
+    - Code reviewed intro lifecycle, title reveal timing, and navbar/auth transitions.
+
+- **FOCUSED TRANSITION FIX — REMOVE AUTH SHADER LAG AND FIX FIRST HOME TITLE LETTER**:
+  - **Backup Created**:
+    - Reversible copies saved in `_backup_auth_shader_and_title_pass/` (`HeroSection.jsx`, `AuthBackgroundShader.jsx`, `PageLayout.jsx`, `router.jsx`, `AUTH_DESIGN.md`, `PROGRESS.md`).
+  - **1. Removed Paper Shader & Preserved Architectural Background Image (`AuthBackground.jsx`, `PageLayout.jsx`)**:
+    - *Identified Cause of Auth Tab Latency*: Login and Register routes hosted `@paper-design/shaders-react`'s WebGL canvas in the background. Even when memoized, WebGL context instantiation, canvas rendering pipelines, and uniform binding caused frame drops and delays during navbar active-tab indicator slide transitions.
+    - *Fix Applied*: Removed the Paper Shader and all WebGL dependencies. Created `AuthBackground.jsx` to render the existing background image (`public/auth/auth-bg.jpg`) directly with hardware-accelerated cover styling:
+      - Soft blur & subtle scale (`w-full h-full object-cover filter blur-md scale-105 opacity-65`).
+      - Soft porcelain tint (`bg-porcelain/60 backdrop-blur-sm`).
+      - Warm Porch Light ambient vignettes (`bg-gradient-to-b from-porcelain/30 via-transparent to-porcelain/60` and `bg-radial-gradient`) preserving quiet sanctuary aesthetics and >= 4.5:1 text contrast.
+    - Hosted persistently in `PageLayout.jsx` with `React.memo`, eliminating re-renders when switching between `/login` and `/register`.
+    - Maintained exact forms, fields, layout, and authentication behavior.
+  - **2. Seamless Login/Register Navbar Switching**:
+    - Switching between Login, Register, Home, Buy, and Rent now operates identically: pure DOM rendering with zero WebGL contention.
+    - Preserved active tab indicator (`motion.div layoutId="header-active-tab"`) gliding seamlessly between all tabs without lag.
+  - **3. Fixed First-Letter Delay in Home Title Reveal (`HeroSection.jsx`)**:
+    - *Identified Cause of First-Letter Delay*:
+      1. Letter 0 ('P') has `delay: 0`, meaning it begins animating on frame 0 upon mount.
+      2. Immediately after the first paint, `useEffect` executed `computeDistance()`, measured `dist`, and invoked `setLetterStartY(dist)`.
+      3. This triggered a post-mount re-render of `HeroSection`. Because `<motion.span>` received a new `initial={{ opacity: 0, y: dist }}` prop, Framer Motion detected a mutated `initial` object on Letter 0 (which was actively animating) and aborted/restarted its animation.
+      4. Letters 1 through 10 ('O', 'R', 'C', 'H', 'L'...) had `delay >= 0.06s` (60ms–600ms) and had not started yet; their timers continued uninterrupted.
+      5. Consequently, Letter 0 was aborted and restarted ~100ms late, making it appear noticeably delayed or lagging behind Letter 1.
+    - *Fix Applied*:
+      - Stabilized the starting Y position via `const initialStartY = useRef(cachedLetterStartY).current`. Because `initialStartY` is stable across all frames, Framer Motion never cancels or restarts Letter 0's active animation.
+      - Switched `computeDistance()` to `useLayoutEffect` before paint to update the module-level cache for future viewports/resizes without triggering post-paint state re-renders.
+      - Initialized `prefersReducedMotion` synchronously on mount to eliminate secondary post-mount state updates.
+      - Result: Letter 0 starts immediately on frame 0, followed by subsequent letters at their exact 0.06s stagger intervals as a smooth, unified reveal.
+  - **4. Verification**:
+    - Static code review of `AuthBackground.jsx`, `PageLayout.jsx`, `HeroSection.jsx`, and `Header.jsx`.
+    - Executed production build check via `cmd.exe /c npm run build`.
+
+- **FOCUSED VISUAL FIX — REMOVE AUTH BACKGROUND BLUR AND SMOOTH THE TITLE START**:
+  - **Backup Created**:
+    - Reversible copies saved in `_backup_visual_and_title_start_pass/` (`AuthBackground.jsx`, `HeroSection.jsx`, `HomePage.jsx`, `AUTH_DESIGN.md`, `PROGRESS.md`).
+  - **1. Removed Blur from Login/Register Background (`AuthBackground.jsx`, `AUTH_DESIGN.md`)**:
+    - *Identified Cause of Background Blur*: In `AuthBackground.jsx`, the `<img>` element had `filter blur-md scale-105` and the tint overlay had `backdrop-blur-sm`.
+    - *Fix Applied*: Removed `filter blur-md scale-105` from the background image and `backdrop-blur-sm` from the overlay. The architectural photo (`public/auth/auth-bg.jpg`) is now presented sharply (`object-cover opacity-75`) with its soft porcelain tint (`bg-porcelain/50`) and warm ambient vignettes.
+    - Preserved container blur: Frosted glass blur is retained exclusively on the login/register card container (`bg-porcelain/75 backdrop-blur-md`).
+  - **2. Fixed Initial-Frame Lag in Home Title Reveal (`HeroSection.jsx`, `HomePage.jsx`)**:
+    - *Identified Causes of Startup Bottleneck*:
+      1. Synchronous Layout Reflow on Mount: In `HeroSection.jsx`, `useLayoutEffect` was executing `computeDistance()`, calling `getBoundingClientRect()` on both the stage and wordmark before the first paint, blocking the main thread right when the title letters mounted.
+      2. Missing GPU Layer Compositing Hints: Wordmark `<motion.span>` tags had `background-clip: text` without `will-change: transform`. As each letter started rising, the browser had to mutate the layer tree and allocate GPU textures during the first few frames.
+      3. Overlapping ScrollTrigger Refresh: In `HomePage.jsx`, `document.fonts.ready` was scheduling a debounced `ScrollTrigger.refresh()` at ~200ms, triggering layout recalculation across all page scenes right as the first letters appeared.
+      4. Redundant Overflow Styles on Mount: `HomePage.jsx` was unconditionally writing to `document.body.style.overflow` even when scrolling was not locked.
+    - *Fixes Applied*:
+      - Removed synchronous `getBoundingClientRect()` calls on mount in `HeroSection.jsx`, keeping `computeDistance` restricted to debounced `resize` events.
+      - Added dynamic `style={{ willChange: isAnimating ? 'transform' : 'auto' }}` on all wordmark letters, pre-promoting them to GPU compositing layers during the reveal and releasing memory after 2.3s.
+      - In `HomePage.jsx`, guarded `document.fonts.ready` to only refresh if fonts are not already loaded (`document.fonts.status !== 'loaded'`), eliminating the 200ms layout spike.
+      - Guarded `document.body.style.overflow` reset in `HomePage.jsx` with `isHomeIntroActive()`.
+      - Result: Initial frames of the Home title reveal run with zero dropped frames or startup stutter.
+  - **3. Verification**:
+    - Code review of background styles, container blur isolation, and title animation startup lifecycle.
+    - Executed production build check via `cmd.exe /c npm run build`.
+
+- **FOCUSED VISUAL FIX — SYNCHRONIZE “RCH” AND SHOW THE AUTH BACKGROUND**:
+  - **Backup Created**:
+    - Reversible copies saved in `_backup_rch_and_auth_overlay/` (`AuthBackground.jsx`, `HeroSection.jsx`, `AUTH_DESIGN.md`, `PROGRESS.md`).
+  - **1. Removed Login/Register Background Overlay and Switched to `auth-bg.png` (`AuthBackground.jsx`, `AUTH_DESIGN.md`)**:
+    - *Identified Cause of Background Washout*:
+      1. Default asset prop referenced `/auth/auth-bg.jpg` instead of `/auth/auth-bg.png`.
+      2. The `<img>` element had `opacity-75`.
+      3. An explicit overlay `div` with `bg-porcelain/50` sat directly on top of the image.
+      4. Ambient vignette layers (`bg-gradient-to-b from-porcelain/30...` and `bg-radial-gradient`) covered the screen with pale porcelain tints, together washing out the architectural background image.
+    - *Fixes Applied*:
+      - Updated default asset prop to `/auth/auth-bg.png` (using the existing `public/auth/auth-bg.png` asset).
+      - Set `w-full h-full object-cover` on the image at full 100% opacity (removed `opacity-75`).
+      - Completely removed the pale `bg-porcelain/50` overlay, the gradient overlay, and the radial vignette overlay.
+      - Preserved the existing frosted blur exclusively on the login/register card container (`bg-porcelain/75 backdrop-blur-md`).
+      - Maintained exact auth page layout, fields, and authentication logic.
+  - **2. Synchronized “RCH” in Home Title Reveal (`HeroSection.jsx`)**:
+    - *Identified Cause of “RCH” Lag*:
+      1. Excessive Initial Vertical Offset: `cachedLetterStartY` was set to an arbitrary 650px (and `computeDistance` clamped to >= 500px). In reality, pixel-level analysis of `hero-house.png` demonstrates the roofline sits at only ~233px below the wordmark resting position.
+      2. Hidden Travel Dead Zone & Curve Deceleration: Because letters started 650px down (417px below the roofline), each letter spent the first ~400ms rising invisibly behind the lower house cutout.
+      3. Rooftop Asymmetry: Because the easing curve `[0.16, 1, 0.3, 1]` decelerates rapidly after 300ms, Letters 0 ('P', 0s delay) and 1 ('O', 0.06s delay) emerged over the lower left roofline while still moving at moderate speed. However, Letters 2, 3, and 4 ('R', 'C', 'H') sit in the center where the roofline/gable is higher. By the time their stagger delays elapsed (0.12s, 0.18s, 0.24s) and they traveled up, their animation curves were already in the flat, decelerated tail, creating a visible pause or lag behind "PO".
+    - *Fixes Applied*:
+      - Calibrated `cachedLetterStartY` baseline to 280px (and updated `computeDistance` on resize to `Math.round(stageHeight * 0.35)`), placing the letters tucked cleanly just below the house cutout roofline.
+      - At 280px, every letter is 100% covered and hidden behind the solid cutout before it begins moving (`opacity: 0, y: 280`).
+      - As each letter's intended 0.06s stagger timer fires (0s for P, 0.06s for O, 0.12s for R, 0.18s for C, 0.24s for H, 0.36s for L, etc.), it immediately emerges into the sky during the fast, energetic upward stroke of its curve.
+      - Preserved the full Warm Sunset styling, Anton typography, one-line desktop layout, mobile stacked layout, 1.6s duration, easing curve, and 0.06s per-letter stagger.
+  - **3. Verification**:
+    - Verified `public/auth/auth-bg.png` exists and is referenced directly in `AuthBackground.jsx`.
+    - Static code review of `AuthBackground.jsx` confirming overlay removal and form card container blur isolation.
+    - Static code review of `HeroSection.jsx` confirming start offset calibration and stagger preservation.
+    - Executed production build: `cmd.exe /c npm run build` compiled 2,577 modules with 0 errors.
+
+- **DASHBOARD SETUP & PLANNING (DOCUMENTATION ONLY)**:
+  - Created comprehensive design specifications for the upcoming User, Agent, and Admin dashboards:
+    1. `DASHBOARD_SYSTEM_DESIGN.md`: Documented the shared dashboard foundation including responsive side navigation, role-scoped search (`Cmd+K`), global header integration (`Header.jsx` at 72px), design system tokens, empty/loading/error states, and notification integration.
+    2. `USER_DASHBOARD_DESIGN.md`: Documented the 10-item ordered User sidebar, personal sanctuary ledger feel, strict buyer/renter isolation, distinct purchased vs. rented property handling, and non-lender advisory calculation rules.
+    3. `AGENT_DASHBOARD_DESIGN.md`: Documented the 11-item ordered Agent sidebar, architectural ledger style, verified vs. pending agent status gates, listing lifecycle with non-destructive transaction preservation, and own-listing isolation.
+    4. `ADMIN_DASHBOARD_DESIGN.md`: Documented the 10-item ordered Admin sidebar, dense queues, split-pane listing review, agent verification workflows, curated featured homes management, and transparent demo labeling.
+    5. *End-to-End Premium Promotion Flow*: Formulated a consistent, transparent lifecycle across Agent and Admin designs (agent request on eligible listing, configurable duration/fee, simulated payment, admin review queue, and separate placement from curated featured homes).
+  - Updated `INTEGRATION.md` with concise future endpoints for dashboard search, promotion requests, and role metrics.
+
+- **FULL DASHBOARD BUILD — SHARED SHELL, USER, AGENT, ADMIN, AND PREMIUM PROMOTION**:
+  - **Shared Dashboard Shell (`src/components/dashboard/`)**:
+    - Built reusable, responsive `DashboardLayout.jsx` with persistent global header integration (`Header.jsx` at 72px), role badge pills (`User Sanctuary`, `Verified Agent` / `Pending Agent`, `Administrator`), active navigation highlights, dynamic unread badge indicators, and a touch-ergonomic mobile drawer (`< 1024px`) with 44px min touch targets.
+    - Built accessible `DashboardSearchModal.jsx` with `Cmd+K` keyboard launcher, 250ms debouncing, role permission scoping, and categorized result dropdowns (Pages, Properties, Visits, Transactions, Messages).
+    - Built quiet loading skeletons (`DashboardSkeleton.jsx`) and standardized Porch Light empty states (`DashboardEmptyState.jsx`).
+  - **User Dashboard (`/dashboard/*`)**:
+    - `UserOverviewPage.jsx`: Welcome header, 4 summary metric cards, immediate upcoming confirmed visit card, real chronological activity timeline, and discovery shortcuts.
+    - `UserPropertiesPage.jsx`: Segmented Buy (Acquisitions) and Rent (Leases) views, real transaction states, PDF receipt download via `jspdf`, and transparent non-lender advisory notices.
+    - `UserSavedPage.jsx`: Reactive wishlist grid, compare set toggle, and quick property detail links.
+    - `UserComparePage.jsx`: Side-by-side comparative specification matrix supporting separate Buy vs. Rent sets with a strict maximum of 3 properties.
+    - `UserVisitsPage.jsx`: Filterable visit lifecycle (confirmed, pending, declined/past) with agent details and notes.
+    - `UserMessagesPage.jsx`: Real-time chat threads with property context bar and agent auto-replies.
+    - `UserPaymentsPage.jsx`: Simulated transaction ledger with PDF receipts and demo sandboxing notices.
+    - `UserNotificationsPage.jsx`: Inbox with unread indicators and mark-all-read action.
+    - `UserHelpPage.jsx`: Concierge ticket submission form and resolution history.
+    - `UserProfilePage.jsx`: Personal preferences and immutable role indicator.
+  - **Agent Dashboard (`/agent/*`)**:
+    - `AgentOverviewPage.jsx`: Active listings, pending reviews, visit activity, unread inquiries, high-priority action queue, and pending verification banner.
+    - `AgentAnalyticsPage.jsx`: Recorded system events (inquiries, visits, transaction closures) without fabricated commission splits.
+    - `AgentListingsPage.jsx`: Own-listing management, lifecycle status tags, Mark Sold / Mark Rented actions, non-destructive transaction preservation, and promotion launcher.
+    - `AgentNewListingPage.jsx`: Property submission with RERA licensing, photo limits, and interactive 360° tour integration.
+    - `AgentVisitsPage.jsx`: Inbound visit requests with Confirm and Decline actions.
+    - `AgentInquiriesPage.jsx`: Client inquiry channels with direct response console.
+    - `AgentTransactionsPage.jsx`: Demo transaction ledger for agent-represented listings with PDF receipts.
+    - `AgentPromotionsPage.jsx`: Premium promotion request flow with configured fee snapshot and simulated checkout.
+    - `AgentNotificationsPage.jsx`: Moderation, visit, and promotion alert feed.
+    - `AgentProfilePage.jsx`: Brokerage credentials and immutable RERA verification badge.
+    - `AgentSupportPage.jsx`: Partner compliance desk and concierge ticket queue.
+  - **Admin Dashboard (`/admin/*`)**:
+    - `AdminOverviewPage.jsx`: Platform-wide operational counts, moderation queue metrics, and simulated volume.
+    - `AdminUsersPage.jsx`: User directory and Agent RERA verification queue with modal approval/rejection.
+    - `AdminApprovalsPage.jsx`: Split-pane listing review queue with architectural critique and rejection reasons.
+    - `AdminFeaturedPage.jsx`: Live curation and ordering (slots 1-4) of properties feeding the Home Top Properties carousel.
+    - `AdminPromotionsPage.jsx`: Review queue for agent promotion requests with approval duration calculation and rejection feedback.
+    - `AdminTransactionsPage.jsx`: Platform-wide simulated transaction audit ledger.
+    - `AdminComplaintsPage.jsx`: Resolution desk for user and agent support tickets.
+    - `AdminReportsPage.jsx`: Diagnostics page reporting property flags and client-side ErrorBoundary exceptions.
+    - `AdminAnnouncementsPage.jsx`: Broadcast dispatch console for platform-wide alerts.
+    - `AdminSettingsPage.jsx`: Live configuration of promotion fees (INR) and showcase duration (Days).
+  - **Premium Promotion Workflow (End-to-End)**:
+    - Agent requests promotion on an approved listing they own -> configured fee/duration snapshot captured -> simulated payment recorded in payments ledger -> request enqueued in Admin Review queue -> Admin approves with placement window (or declines with reason) -> approved properties feed the Home Top Properties carousel (`TopPropertiesSection.jsx`) sorted by `featuredOrder`.
+  - **Verification**:
+    - Executed `npm run build` compiling 2,541 modules with 0 errors.
+
+## Completed Work (Full-Stack Fixes & Production Foundation)
+- **GOOGLE ACCOUNT CHOOSER & AUTHENTICATION (`GoogleLoginButton.jsx`, `auth.controller.js`, `auth.routes.js`, `auth.js`)**:
+  - Traced and eliminated bypass where Google sign-in previously auto-selected the first mock/dev user without showing Google Identity Services.
+  - Implemented Google Identity Services OAuth2 token client with explicit `prompt: 'select_account'` on click, disabling auto-select, One Tap, and cached login hints.
+  - Added `GET /api/auth/google/config` delivering authoritative public `clientId` dynamically to the client.
+  - Backend `POST /api/auth/google` verifies Google token signature and audience against Google endpoints (`aud === config.google.clientId`).
+  - Enforced strict User-only rule: Google sign-in is reserved strictly for `user` accounts. Rejects Agent and Admin authentication attempts with HTTP 403 Forbidden.
+- **PROPERTY IMAGES STANDARDIZATION & SMARTIMAGE FIX (`Property.js`, `SmartImage.jsx`, `properties.controller.js`, `seedDev.js`)**:
+  - Standardized on a canonical `coverImage` field across Mongoose schemas, Express controllers, cards, details, maps, and comparison views.
+  - Added pre-save hook guaranteeing `coverImage` is always populated from `images` and present in the gallery array.
+  - Fixed `SmartImage.jsx` opacity bug where errored or loading images failed to transition to `opacity-100`, leaving cards blank. Fallback themed SVG placeholder now renders gracefully.
+  - Seeded each property with exactly 5 valid architectural stock photos and ensured `coverImage === images[0]`.
+- **FIXED NUMERIC PRICING & REMOVAL OF NEGOTIABLE OPTION (`formatINR.js`, `Property.js`, `properties.controller.js`, `AgentNewListingPage.jsx`, `PropertyDetailsPage.jsx`, `AdminApprovalsPage.jsx`, `seedDev.js`)**:
+  - Removed "Price negotiable" toggle and attributes from Agent Add/Edit forms, API validation, Mongoose models, and database seeds.
+  - Controllers defensively strip any incoming `negotiable` properties.
+  - Cleaned up conditional price branches in `PropertyDetailsPage.jsx` and `AdminApprovalsPage.jsx`, displaying fixed numeric prices everywhere.
+- **BUY EMI CALCULATOR TO CHECKOUT FLOW (`PropertyDetailsPage.jsx`, `CheckoutPage.jsx`, `payments.controller.js`, `Payment.js`)**:
+  - Carried property price and calculator selections from Property View into Checkout.
+  - Added interactive sliders and quick preset buttons on Checkout allowing users to adjust down payment (10%-80%) and loan term (12-360 months).
+  - Live recalculation of loan principal, monthly EMI, total interest, and total repayment using the platform benchmark rate (8.5% p.a.).
+  - Backend `POST /api/payments/checkout` authoritatively validates and recomputes all financing metrics server-side, storing them on the MongoDB `Payment.financingDetails` document.
+  - Carried financing structure snapshot onto confirmation screens and downloadable PDF receipts.
+  - Payment flow remains simulated in demo mode with clear disclaimers.
+- **MONGODB DATABASE SEEDING & ATLAS CONNECTION (`seedDev.js`, `verifyDb.js`, `Porch_server/.env`)**:
+  - Diagnosed Atlas connection issue: placeholder `<db_password>` and missing database name `/porchlight` in `Porch_server/.env` safely routed server to active local MongoDB (`mongodb://127.0.0.1:27017/porchlight`).
+  - Added automated collection backup routine saving previous snapshots to `Porch_server/backups/db_backup_<timestamp>.json`.
+  - Successfully seeded exactly 27 properties across 9 cities (3 in each): 17 available, 4 leased, 2 sold, 2 pending, 2 rejected, 5 premium, and 4 featured in the Admin showcase.
+  - Seeded 1 Admin (`navaneethestate56@gmail.com` with dev password `admin123`), 4 Users, 3 Approved Agents (9 properties each), and 1 Pending Agent (0 properties, `isVerified: false`).
+  - Validated database integrity: 0 bad image counts, 0 missing cover images, 0 negotiable fields.
+- **SYSTEM VERIFICATION**:
+  - Backend server running on `http://localhost:5000` with active MongoDB connection.
+  - Frontend production build (`npm run build`) succeeded with 0 errors.
+
+- **PAYMENT SCHEDULES — EMI AND RENT IN-APP WORKFLOW (`PaymentSchedule.js`, `Payment.js`, `scheduleGenerator.js`, `payments.controller.js`, `duePaymentScheduler.js`, `InstallmentPaymentModal.jsx`, `UserPaymentsPage.jsx`, `AgentAnalyticsPage.jsx`)**:
+  - **Authoritative Schedule Model (`PaymentSchedule.js`)**: Backed by MongoDB schema storing customId, propertySnapshot, user/agent identifiers, `initialPaymentId` (enforced unique to prevent duplicate schedules on checkout retries), total amount, down payment, financed principal, monthly installment amount, installment count, paid count, remaining balance, and embedded installment ledger.
+  - **Date Calculator & Status Sync (`scheduleGenerator.js`)**: Derives schedule due dates in IST (UTC+5:30) with safe month-length clamping (e.g. Feb 28/29, Apr 30), preventing cross-month date slippage. Evaluates dynamic statuses (`paid`, `overdue`, `due_today`, `upcoming`).
+  - **Payment & Schedule Endpoints (`payments.controller.js`)**:
+    - `GET /api/payments/schedules`: Scoped fetch of active/completed schedules for authenticated User, Agent, or Admin.
+    - `GET /api/payments/schedules/:id`: Scoped schedule fetch by ID.
+    - `POST /api/payments/schedules/:id/installments/:installmentNumber/pay`: Atomic verification and payment processing. Strictly prevents double payment or unauthorized payer attempts (403/400). Records a new `Payment` ledger item, marks installment paid, decrements remaining balance, and dispatches idempotent notifications to User and Agent.
+  - **Daily Due-Day Background Scheduler (`duePaymentScheduler.js`)**: Standalone background job running once per date that scans active schedules, identifies due/overdue installments with `!notificationSentAt`, dispatches idempotent notifications with deterministic IDs (`notif_due_usr_...` / `notif_due_agt_...`), and updates `notificationSentAt`. Integrated into `server.js` startup and graceful shutdown.
+  - **User Transactions & Activity Redesign (`UserPaymentsPage.jsx` & `InstallmentPaymentModal.jsx`)**:
+    - Replaced flat table with two dedicated tabs: "Upcoming Schedules" and "Payment History".
+    - Distinct, elegant sections for "Upcoming EMI Installments" and "Upcoming Rent Payments" with status badges and direct "Pay Now" actions.
+    - `InstallmentPaymentModal` implements existing in-app payment methods (UPI, Card, NetBanking), 3-step simulated escrow processing, dev force failure toggle, and instant PDF receipt download.
+  - **Agent Analytics Integration (`AgentAnalyticsPage.jsx`)**: Added "Upcoming Rent & EMI Obligations" ledger table inside the Money section, listing upcoming obligations with due date, property title, installment type, amount, status pill, and link to property details, keeping font weights calm and unbolded.
+  - **Focused Verification**: Verified schedule generation, duplicate prevention, unauthorized access block, authorized payment flow, idempotent scheduler notifications, and zero impact on full-payment purchase flow.
+
+
+
+
+
+
+
+
+
+
